@@ -1,5 +1,9 @@
 # -----------------------------------------------------------------------------
 # PostgreSQL RDS - Outputs
+#
+# When running as a Qovery Terraform service (lifecycle job), these outputs
+# are written to /qovery-output/qovery-output.json so that other services
+# in the same environment can consume them as environment variables.
 # -----------------------------------------------------------------------------
 
 output "id" {
@@ -51,4 +55,14 @@ output "connection_string" {
   description = "PostgreSQL connection string (without password)"
   value       = "postgresql://${aws_db_instance.postgresql.username}@${aws_db_instance.postgresql.address}:${aws_db_instance.postgresql.port}/${aws_db_instance.postgresql.db_name}"
   sensitive   = false
+}
+
+output "vpc_id" {
+  description = "The VPC ID where the RDS instance is deployed"
+  value       = local.vpc_id
+}
+
+output "security_group_id" {
+  description = "The security group ID attached to the RDS instance"
+  value       = length(var.security_group_ids) == 0 ? aws_security_group.rds[0].id : var.security_group_ids[0]
 }

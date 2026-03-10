@@ -1,13 +1,31 @@
 # =============================================================================
 # PostgreSQL RDS - Example Variable Values
-# Copy this file to terraform.tfvars and fill in your values
+# Copy this file to terraform.tfvars and fill in your values.
+#
+# When running inside Qovery, most of these can be set as environment variables
+# using the TF_VAR_ prefix + Qovery built-in variable interpolation:
+#
+#   TF_VAR_qovery_cluster_name   = {{QOVERY_KUBERNETES_CLUSTER_NAME}}
+#   TF_VAR_region                = {{QOVERY_CLOUD_PROVIDER_REGION}}
+#   TF_VAR_qovery_environment_id = {{QOVERY_ENVIRONMENT_ID}}
+#   TF_VAR_qovery_project_id     = {{QOVERY_PROJECT_ID}}
+#
+# AWS credentials should be set as secrets:
+#   AWS_ACCESS_KEY_ID     = <your-key>
+#   AWS_SECRET_ACCESS_KEY = <your-secret>
 # =============================================================================
 
-# -- Required -----------------------------------------------------------------
+# -- Required (Qovery context) -----------------------------------------------
 
-kubernetes_cluster_id  = "your-qovery-cluster-id"
-postgresql_identifier  = "my-app-postgresql"
-password               = "change-me-to-a-strong-password"
+qovery_cluster_name   = "qovery-z1234abcd"       # or use TF_VAR_ env var
+region                = "eu-west-3"               # or use TF_VAR_ env var
+qovery_environment_id = ""                        # or use TF_VAR_ env var
+qovery_project_id     = ""                        # or use TF_VAR_ env var
+
+# -- Required (instance) -----------------------------------------------------
+
+postgresql_identifier = "my-app-postgresql"
+password              = "change-me-to-a-strong-password"
 
 # -- Instance Configuration ---------------------------------------------------
 
@@ -29,9 +47,10 @@ password               = "change-me-to-a-strong-password"
 
 # snapshot_identifier = "rds:my-snapshot-id"
 
-# -- Network Overrides (leave empty to auto-discover from cluster) ------------
+# -- Network Overrides (leave empty to auto-derive from EKS cluster) ----------
 
-# vpc_id               = ""
+# vpc_id               = ""         # or use TF_VAR_vpc_id
+# subnet_ids           = []
 # security_group_ids   = []
 # db_subnet_group_name = ""
 
@@ -51,8 +70,7 @@ password               = "change-me-to-a-strong-password"
 
 # performance_insights_enabled   = true
 # performance_insights_retention = 7
-# monitoring_interval            = 10
-# monitoring_role_arn            = ""  # leave empty to auto-discover
+# monitoring_interval            = 10    # set to 0 to disable enhanced monitoring
 
 # -- Backup -------------------------------------------------------------------
 
@@ -64,8 +82,6 @@ password               = "change-me-to-a-strong-password"
 
 # -- Tags ---------------------------------------------------------------------
 
-# environment = "production"
-# project     = "my-project"
 # tags = {
 #   Team  = "platform"
 #   Owner = "alice"

@@ -1,31 +1,62 @@
 # -----------------------------------------------------------------------------
 # PostgreSQL RDS - Variables
 # Converted from Qovery engine Jinja2 templates to raw Terraform
+#
+# Variables that can be auto-populated from Qovery built-in env vars are marked
+# with the corresponding TF_VAR_ mapping in their description.
+# Set them in Qovery as:  TF_VAR_<name> = {{QOVERY_..._BUILT_IN}}
 # -----------------------------------------------------------------------------
 
 # =============================================================================
-# Network / Cluster Discovery
+# Qovery Context (auto-populated from built-in env vars)
 # =============================================================================
 
-variable "kubernetes_cluster_id" {
-  description = "Qovery Kubernetes cluster ID, used to discover VPC, security groups, and IAM roles"
+variable "qovery_cluster_name" {
+  description = "EKS cluster name. Maps to Qovery built-in: QOVERY_KUBERNETES_CLUSTER_NAME"
   type        = string
 }
 
-variable "vpc_id" {
-  description = "Explicit VPC ID. If set, skips VPC lookup by cluster tag. Leave empty to auto-discover."
+variable "region" {
+  description = "AWS region. Maps to Qovery built-in: QOVERY_CLOUD_PROVIDER_REGION"
+  type        = string
+}
+
+variable "qovery_environment_id" {
+  description = "Qovery environment ID. Maps to Qovery built-in: QOVERY_ENVIRONMENT_ID"
   type        = string
   default     = ""
 }
 
+variable "qovery_project_id" {
+  description = "Qovery project ID. Maps to Qovery built-in: QOVERY_PROJECT_ID"
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
+# Network Overrides (optional -- derived from EKS cluster by default)
+# =============================================================================
+
+variable "vpc_id" {
+  description = "Explicit VPC ID. If empty, derived from the EKS cluster."
+  type        = string
+  default     = ""
+}
+
+variable "subnet_ids" {
+  description = "Explicit list of subnet IDs for the DB subnet group. If empty, derived from EKS cluster."
+  type        = list(string)
+  default     = []
+}
+
 variable "security_group_ids" {
-  description = "Explicit list of security group IDs. If set, skips SG lookup by cluster tags. Leave empty to auto-discover."
+  description = "Explicit list of security group IDs. If empty, a new SG is created allowing traffic from the EKS cluster."
   type        = list(string)
   default     = []
 }
 
 variable "db_subnet_group_name" {
-  description = "Name of the DB subnet group. If empty, defaults to the discovered VPC ID (Qovery convention)."
+  description = "Existing DB subnet group name. If empty, one is created from the EKS subnets."
   type        = string
   default     = ""
 }
@@ -186,15 +217,9 @@ variable "performance_insights_retention" {
 }
 
 variable "monitoring_interval" {
-  description = "Enhanced Monitoring interval in seconds (0, 1, 5, 10, 15, 30, 60)"
+  description = "Enhanced Monitoring interval in seconds (0, 1, 5, 10, 15, 30, 60). Set to 0 to disable."
   type        = number
   default     = 10
-}
-
-variable "monitoring_role_arn" {
-  description = "ARN of the IAM role for Enhanced Monitoring. If empty, auto-discovered from cluster ID."
-  type        = string
-  default     = ""
 }
 
 # =============================================================================
@@ -245,16 +270,4 @@ variable "tags" {
   description = "Additional tags to apply to all resources"
   type        = map(string)
   default     = {}
-}
-
-variable "environment" {
-  description = "Environment name (e.g. production, staging, dev)"
-  type        = string
-  default     = ""
-}
-
-variable "project" {
-  description = "Project name or identifier"
-  type        = string
-  default     = ""
 }
