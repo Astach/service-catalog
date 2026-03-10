@@ -1,0 +1,72 @@
+# =============================================================================
+# PostgreSQL RDS - Example Variable Values
+# Copy this file to terraform.tfvars and fill in your values
+# =============================================================================
+
+# -- Required -----------------------------------------------------------------
+
+kubernetes_cluster_id  = "your-qovery-cluster-id"
+postgresql_identifier  = "my-app-postgresql"
+password               = "change-me-to-a-strong-password"
+
+# -- Instance Configuration ---------------------------------------------------
+
+# instance_class      = "db.t3.micro"
+# postgresql_version  = "16"
+# port                = 5432
+# storage_type        = "gp3"
+# disk_size           = 20
+# encrypt_disk        = true
+# database_name       = "postgres"
+# username            = "qovery"
+
+# -- IOPS (only for io1/io2/gp3 when you need custom IOPS) -------------------
+
+# enable_disk_iops = true
+# disk_iops        = 3000
+
+# -- Snapshot Restore (uncomment to restore from snapshot) --------------------
+
+# snapshot_identifier = "rds:my-snapshot-id"
+
+# -- Network Overrides (leave empty to auto-discover from cluster) ------------
+
+# vpc_id               = ""
+# security_group_ids   = []
+# db_subnet_group_name = ""
+
+# -- High Availability -------------------------------------------------------
+
+# multi_az             = true
+# publicly_accessible  = false
+
+# -- Maintenance --------------------------------------------------------------
+
+# apply_changes_now            = false
+# allow_major_version_upgrade  = true
+# auto_minor_version_upgrade   = true
+# preferred_maintenance_window = "Tue:02:00-Tue:04:00"
+
+# -- Monitoring ---------------------------------------------------------------
+
+# performance_insights_enabled   = true
+# performance_insights_retention = 7
+# monitoring_interval            = 10
+# monitoring_role_arn            = ""  # leave empty to auto-discover
+
+# -- Backup -------------------------------------------------------------------
+
+# backup_retention_period  = 14
+# preferred_backup_window  = "00:00-01:00"
+# skip_final_snapshot      = false
+# final_snapshot_name      = "final-snapshot"
+# delete_automated_backups = false
+
+# -- Tags ---------------------------------------------------------------------
+
+# environment = "production"
+# project     = "my-project"
+# tags = {
+#   Team  = "platform"
+#   Owner = "alice"
+# }
