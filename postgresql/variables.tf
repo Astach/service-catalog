@@ -144,6 +144,11 @@ variable "password" {
   description = "Master password"
   type        = string
   sensitive   = true
+
+ validation {
+    condition     = length(var.password) > 8 
+    error_message = "The parameter MasterUserPassword is not a valid password because it is shorter than 8 characters."
+  }
 }
 
 # =============================================================================
