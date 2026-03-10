@@ -1,0 +1,201 @@
+name: Validate Blueprints
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags:
+      - '*-v*'
+
+jobs:
+  validate-qsm:
+    name: Validate QSM manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          pip install check-jsonschema pyyaml
+          sudo apt-get install -y jq
+
+      - name: Find all qsm.yml files
+        id: find-qsm
+        run: |
+          files=$(find . -name 'qsm.yml' -type f | sort)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$files" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Validate qsm.yml against JSON Schema
+        run: |
+          for qsm in $(find . -name 'qsm.yml' -type f); do
+            echo "Validating $qsm..."
+            check-jsonschema --schemafile schemas/qsm-schema.json "$qsm"
+          done
+
+      - name: Validate metadata.name matches directory path
+        run: |
+          for qsm in $(find . -name 'qsm.yml' -type f); do
+            dir=$(dirname "$qsm" | sed 's|^\./||')
+            expected_name=$(echo "$dir" | sed 's|/|-|g')
+            actual_name=$(python3 -c "
+          import yaml, sys
+          with open('$qsm') as f:
+              doc = yaml.safe_load(f)
+          print(doc['metadata']['name'])
+          ")
+            if [ "$expected_name" != "$actual_name" ]; then
+              echo "ERROR: $qsm metadata.name '$actual_name' does not match directory '$expected_name'"
+              exit 1
+            fi
+            echo "OK: $qsm name '$actual_name' matches directory"
+          done
+
+      - name: Validate injectedVariables exist in variables.tf
+        run: |
+          for qsm in $(find . -name 'qsm.yml' -type f); do
+            dir=$(dirname "$qsm")
+            vars_file="$dir/variables.tf"
+            if [ ! -f "$vars_file" ]; then
+              echo "ERROR: $vars_file not found"
+              exit 1
+            fi
+
+            python3 -c "
+          import yaml, re, sys
+          with open('$qsm') as f:
+              doc = yaml.safe_load(f)
+
+          # Extract variable names from variables.tf
+          with open('$vars_file') as f:
+              tf_content = f.read()
+          tf_vars = set(re.findall(r'variable\s+\"(\w+)\"', tf_content))
+
+          errors = []
+          for var in doc['spec'].get('injectedVariables', []):
+              if var['name'] not in tf_vars:
+                  errors.append(f\"injectedVariable '{var['name']}' not found in {\"$vars_file\"}\")
+
+          for var in doc['spec'].get('userVariables', []):
+              if var['name'] not in tf_vars:
+                  errors.append(f\"userVariable '{var['name']}' not found in {\"$vars_file\"}\")
+
+          if errors:
+              for e in errors:
+                  print(f'ERROR: {e}')
+              sys.exit(1)
+          print(f'OK: All variables in $qsm exist in $vars_file')
+          "
+          done
+
+      - name: Validate outputs start with QOVERY_ and exist in .tf files
+        run: |
+          for qsm in $(find . -name 'qsm.yml' -type f); do
+            dir=$(dirname "$qsm")
+
+            python3 -c "
+          import yaml, re, glob, sys
+          with open('$qsm') as f:
+              doc = yaml.safe_load(f)
+
+          # Extract output names from all .tf files in the directory
+          tf_outputs = set()
+          for tf_file in glob.glob('$dir/*.tf'):
+              with open(tf_file) as f:
+                  tf_outputs.update(re.findall(r'output\s+\"(\w+)\"', f.read()))
+
+          errors = []
+          for output in doc['spec'].get('outputs', []):
+              name = output['name']
+              if not name.startswith('QOVERY_'):
+                  errors.append(f\"Output '{name}' must start with 'QOVERY_'\")
+              if name not in tf_outputs:
+                  errors.append(f\"Output '{name}' not found in .tf files in $dir\")
+
+          if errors:
+              for e in errors:
+                  print(f'ERROR: {e}')
+              sys.exit(1)
+          print(f'OK: All outputs in $qsm are valid')
+          "
+          done
+
+  validate-terraform:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        blueprint:
+          - aws/postgresql
+          - aws/mysql
+          - aws/redis
+          - aws/mongodb
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9"
+
+      - name: Terraform init & validate
+        working-directory: ${{ matrix.blueprint }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  validate-tag:
+    name: Validate tag matches QSM version
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          echo "Tag: $tag"
+
+          # Extract blueprint name and version from tag (e.g., aws-postgresql-v1.0.0)
+          if [[ ! "$tag" =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "ERROR: Tag '$tag' does not match pattern '{name}-v{semver}'"
+            exit 1
+          fi
+
+          tag_name="${BASH_REMATCH[1]}"
+          tag_version="${BASH_REMATCH[2]}"
+
+          # Convert blueprint name to directory path (aws-postgresql -> aws/postgresql)
+          dir_path=$(echo "$tag_name" | sed 's|-|/|1')
+          qsm_file="$dir_path/qsm.yml"
+
+          if [ ! -f "$qsm_file" ]; then
+            echo "ERROR: $qsm_file not found for tag '$tag'"
+            exit 1
+          fi
+
+          # Validate metadata.name matches tag prefix
+          actual_name=$(python3 -c "
+          import yaml
+          with open('$qsm_file') as f:
+              doc = yaml.safe_load(f)
+          print(doc['metadata']['name'])
+          ")
+          if [ "$tag_name" != "$actual_name" ]; then
+            echo "ERROR: Tag name '$tag_name' does not match qsm.yml name '$actual_name'"
+            exit 1
+          fi
+
+          # Validate metadata.version matches tag version
+          actual_version=$(python3 -c "
+          import yaml
+          with open('$qsm_file') as f:
+              doc = yaml.safe_load(f)
+          print(doc['metadata']['version'])
+          ")
+          if [ "$tag_version" != "$actual_version" ]; then
+            echo "ERROR: Tag version '$tag_version' does not match qsm.yml version '$actual_version'"
+            exit 1
+          fi
+
+          echo "OK: Tag '$tag' matches qsm.yml (name=$actual_name, version=$actual_version)"

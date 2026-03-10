@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qovery.com/schemas/qsm/v1/qsm-schema.json",
+  "title": "Qovery Service Manifest (QSM)",
+  "description": "Schema for qsm.yml files in the Qovery Service Catalog",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "qovery.com/v1",
+      "description": "API version. Must be 'qovery.com/v1'."
+    },
+    "kind": {
+      "type": "string",
+      "const": "ServiceBlueprint",
+      "description": "Resource kind. Must be 'ServiceBlueprint'."
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z]+-[a-z][a-z0-9-]*$",
+          "description": "Unique blueprint name. Must match {provider}-{service} format (e.g., aws-postgresql)."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+          "description": "Semantic version (e.g., 1.0.0). Must match the Git tag version suffix."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500,
+          "description": "Human-readable description shown in the catalog UI."
+        },
+        "icon": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to an icon image for the catalog card."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "uniqueItems": true,
+          "description": "Tags for search and filtering."
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["provider", "category", "engine", "injectedVariables", "userVariables", "outputs"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["aws", "gcp", "azure", "scaleway"],
+          "description": "Cloud provider. Used for filtering blueprints."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["storage", "database", "cache", "messaging", "networking", "compute", "security", "monitoring", "other"],
+          "description": "Service category. Used for filtering blueprints."
+        },
+        "engine": {
+          "type": "string",
+          "enum": ["terraform", "opentofu"],
+          "description": "IaC engine used by this blueprint."
+        },
+        "engineVersionConstraint": {
+          "type": "string",
+          "description": "Version constraint for the engine binary (e.g., '>= 1.5')."
+        },
+        "injectedVariables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/injectedVariable"
+          },
+          "description": "Variables auto-filled by q-core from environment/cluster context. Never shown to the user."
+        },
+        "userVariables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/userVariable"
+          },
+          "description": "Variables shown to the user in the provisioning form."
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/output"
+          },
+          "description": "Outputs produced by the blueprint after Terraform apply. Names must start with 'QOVERY_'."
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dependency"
+          },
+          "description": "Informational only. Shown as 'You might also need...' in the UI."
+        },
+        "resources": {
+          "$ref": "#/$defs/resources",
+          "description": "Default resource allocation for the Terraform Job."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "injectedVariable": {
+      "type": "object",
+      "required": ["name", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "description": "Variable name. Must match a variable in variables.tf."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "cluster.name",
+            "cluster.region",
+            "cluster.vpc_id",
+            "cluster.subnet_ids",
+            "cluster.security_group_ids",
+            "environment.id",
+            "project.id",
+            "organization.id"
+          ],
+          "description": "Source path for the injected value."
+        }
+      }
+    },
+    "userVariable": {
+      "type": "object",
+      "required": ["name", "type", "required", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "description": "Variable name. Must match a variable in variables.tf."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "bool"],
+          "description": "Variable type."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether the user must provide a value."
+        },
+        "default": {
+          "type": "string",
+          "description": "Default value (as string). Used if user does not provide a value."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description shown in the provisioning form."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "description": "If true, value is masked in the UI and stored as a secret."
+        },
+        "uiHint": {
+          "type": "string",
+          "enum": ["text", "password", "dropdown", "toggle", "textarea"],
+          "description": "Hint for the UI rendering."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Available options for dropdown variables."
+        },
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "description": "Validation constraints for the variable value."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^QOVERY_[A-Z][A-Z0-9_]*$",
+          "description": "Output name. Must start with 'QOVERY_'."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the output."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "description": "If true, the output value is treated as a secret."
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["blueprint", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "blueprint": {
+          "type": "string",
+          "description": "Name of the recommended blueprint."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this dependency is recommended."
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultCpu": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 8000,
+          "description": "Default CPU in millicores."
+        },
+        "defaultRam": {
+          "type": "integer",
+          "minimum": 128,
+          "maximum": 16384,
+          "description": "Default RAM in MiB."
+        },
+        "defaultTimeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120,
+          "description": "Default timeout in minutes."
+        }
+      }
+    }
+  }
+}

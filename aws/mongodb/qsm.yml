@@ -1,0 +1,137 @@
+apiVersion: qovery.com/v1
+kind: ServiceBlueprint
+
+metadata:
+  name: "aws-mongodb"
+  version: "1.0.0"
+  description: "Provision an AWS DocumentDB (MongoDB-compatible) cluster with encryption and automated backups"
+  icon: "https://cdn.qovery.com/icons/aws-documentdb-mongodb.svg"
+  tags:
+    - "database"
+    - "mongodb"
+    - "documentdb"
+    - "nosql"
+
+spec:
+  provider: "aws"
+  category: "database"
+  engine: "terraform"
+  engineVersionConstraint: ">= 1.5"
+
+  injectedVariables:
+    - name: "qovery_cluster_name"
+      source: "cluster.name"
+    - name: "region"
+      source: "cluster.region"
+    - name: "qovery_environment_id"
+      source: "environment.id"
+    - name: "qovery_project_id"
+      source: "project.id"
+    - name: "vpc_id"
+      source: "cluster.vpc_id"
+    - name: "subnet_ids"
+      source: "cluster.subnet_ids"
+    - name: "security_group_ids"
+      source: "cluster.security_group_ids"
+
+  userVariables:
+    - name: "documentdb_identifier"
+      type: "string"
+      required: true
+      description: "DocumentDB cluster identifier"
+      uiHint: "text"
+    - name: "password"
+      type: "string"
+      required: true
+      description: "Master password (minimum 9 characters)"
+      uiHint: "password"
+      sensitive: true
+    - name: "instance_class"
+      type: "string"
+      required: false
+      default: "db.t3.medium"
+      description: "DocumentDB instance class"
+      uiHint: "dropdown"
+      options:
+        - "db.t3.medium"
+        - "db.r5.large"
+        - "db.r5.xlarge"
+        - "db.r5.2xlarge"
+        - "db.r6g.large"
+        - "db.r6g.xlarge"
+    - name: "documentdb_version"
+      type: "string"
+      required: false
+      default: "5.0"
+      description: "DocumentDB engine version"
+      uiHint: "dropdown"
+      options: ["4.0", "5.0"]
+    - name: "instances_number"
+      type: "number"
+      required: false
+      default: "1"
+      description: "Number of instances in the cluster"
+      uiHint: "text"
+    - name: "username"
+      type: "string"
+      required: false
+      default: "qovery"
+      description: "Master username"
+      uiHint: "text"
+    - name: "encrypt_disk"
+      type: "bool"
+      required: false
+      default: "true"
+      description: "Enable storage encryption at rest"
+      uiHint: "toggle"
+    - name: "backup_retention_period"
+      type: "number"
+      required: false
+      default: "14"
+      description: "Number of days to retain automated backups (1-35)"
+      uiHint: "text"
+
+  outputs:
+    - name: "QOVERY_MONGODB_HOST"
+      description: "Cluster endpoint (writer)"
+      sensitive: false
+    - name: "QOVERY_MONGODB_PORT"
+      description: "Database port"
+      sensitive: false
+    - name: "QOVERY_MONGODB_USERNAME"
+      description: "Master username"
+      sensitive: false
+    - name: "QOVERY_MONGODB_CONNECTION_STRING"
+      description: "MongoDB connection string (without password)"
+      sensitive: false
+    - name: "QOVERY_MONGODB_READER_ENDPOINT"
+      description: "Reader endpoint (load-balanced across replicas)"
+      sensitive: false
+    - name: "QOVERY_MONGODB_ARN"
+      description: "DocumentDB cluster ARN"
+      sensitive: false
+    - name: "QOVERY_MONGODB_CLUSTER_ID"
+      description: "DocumentDB cluster ID"
+      sensitive: false
+    - name: "QOVERY_MONGODB_CLUSTER_IDENTIFIER"
+      description: "DocumentDB cluster identifier"
+      sensitive: false
+    - name: "QOVERY_MONGODB_INSTANCE_IDS"
+      description: "IDs of the cluster instances"
+      sensitive: false
+    - name: "QOVERY_MONGODB_INSTANCE_ENDPOINTS"
+      description: "Endpoints of each cluster instance"
+      sensitive: false
+    - name: "QOVERY_MONGODB_VPC_ID"
+      description: "VPC ID where the cluster is deployed"
+      sensitive: false
+    - name: "QOVERY_MONGODB_SECURITY_GROUP_ID"
+      description: "Security group ID attached to the cluster"
+      sensitive: false
+
+  dependencies: []
+
+  resources:
+    defaultCpu: 500
+    defaultRam: 512
+    defaultTimeout: 30

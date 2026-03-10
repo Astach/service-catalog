@@ -1,0 +1,24 @@
+# =============================================================================
+# MongoDB (DocumentDB) - Example Variable Values
+#
+# Qovery built-in env var mappings:
+#   TF_VAR_qovery_cluster_name   = {{QOVERY_KUBERNETES_CLUSTER_NAME}}
+#   TF_VAR_region                = {{QOVERY_CLOUD_PROVIDER_REGION}}
+#   TF_VAR_qovery_environment_id = {{QOVERY_ENVIRONMENT_ID}}
+#   TF_VAR_qovery_project_id     = {{QOVERY_PROJECT_ID}}
+# =============================================================================
+
+qovery_cluster_name    = "qovery-z1234abcd"
+region                 = "eu-west-3"
+documentdb_identifier  = "my-app-docdb"
+password               = "change-me-to-a-strong-password"
+
+# documentdb_version         = "5.0"
+# instance_class             = "db.t3.medium"
+# instances_number           = 1
+# port                       = 27017
+# username                   = "qovery"
+# encrypt_disk               = true
+# auto_minor_version_upgrade = true
+# backup_retention_period    = 14
+# skip_final_snapshot        = false
