@@ -55,23 +55,61 @@ aws-mongodb-v1.0.0
 
 The `version` field in `qsm.yml` must match the tag suffix. CI enforces this on tag pushes.
 
-## Output Naming Convention
+## Alias Variable Mechanism
 
-All Terraform outputs must be prefixed with `QOVERY_` followed by the service type:
+Catalog services use an automatic alias bridge to expose Terraform outputs as environment variables to other services in the same environment.
 
-```
-QOVERY_POSTGRESQL_HOST
-QOVERY_POSTGRESQL_PORT
-QOVERY_MYSQL_CONNECTION_STRING
-QOVERY_REDIS_HOST
-```
+### How it works
 
-When a user provisions a service named "my-database", the platform computes environment variables as:
+1. Every Terraform output in a blueprint **must** be prefixed with `QOVERY_` (e.g. `QOVERY_POSTGRESQL_HOST`).
+2. When a user provisions a service, they give it a **service name** (e.g. `my-database`).
+3. After Terraform apply, q-core reads the outputs and computes environment variable names using the formula:
 
 ```
-MY_DATABASE_POSTGRESQL_HOST
-MY_DATABASE_POSTGRESQL_PORT
+{UPPER_SNAKE_SERVICE_NAME}_{OUTPUT_NAME_WITHOUT_QOVERY_PREFIX}
 ```
+
+4. These environment variables are created at **environment scope**, so every other service in the environment can read them.
+
+### Example
+
+A user provisions the `aws-postgresql` blueprint and names the service `my-database`.
+
+| Terraform output | Environment variable |
+|---|---|
+| `QOVERY_POSTGRESQL_HOST` | `MY_DATABASE_POSTGRESQL_HOST` |
+| `QOVERY_POSTGRESQL_PORT` | `MY_DATABASE_POSTGRESQL_PORT` |
+| `QOVERY_POSTGRESQL_DATABASE` | `MY_DATABASE_POSTGRESQL_DATABASE` |
+| `QOVERY_POSTGRESQL_USERNAME` | `MY_DATABASE_POSTGRESQL_USERNAME` |
+| `QOVERY_POSTGRESQL_CONNECTION_STRING` | `MY_DATABASE_POSTGRESQL_CONNECTION_STRING` |
+
+The service name is normalized: lowercased with hyphens/spaces replaced by underscores, then uppercased (`my-database` -> `MY_DATABASE`).
+
+### No collisions
+
+Because each service has a unique name within an environment, the prefix is always unique. Two PostgreSQL instances named `main-db` and `analytics-db` produce separate variable sets:
+
+```
+MAIN_DB_POSTGRESQL_HOST       = "main.abc.rds.amazonaws.com"
+ANALYTICS_DB_POSTGRESQL_HOST  = "analytics.def.rds.amazonaws.com"
+```
+
+### Consuming the variables
+
+Other services (containers, jobs) read them as plain environment variables -- no SDK required:
+
+```python
+import os
+db_host = os.environ["MY_DATABASE_POSTGRESQL_HOST"]
+redis_host = os.environ["MY_CACHE_REDIS_HOST"]
+```
+
+### Rules for blueprint authors
+
+- All output names **must** start with `QOVERY_` (enforced by CI).
+- The part after `QOVERY_` should identify the service type (`POSTGRESQL_`, `MYSQL_`, `REDIS_`, `MONGODB_`).
+- Aliases are **not user-editable** -- they are deterministic from the service name.
+- Sensitive outputs should be marked with `sensitive: true` in `qsm.yml` and will be stored as secrets.
 
 ## Contributing
 
