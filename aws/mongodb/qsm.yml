@@ -92,40 +92,40 @@ spec:
       uiHint: "text"
 
   outputs:
-    - name: "QOVERY_MONGODB_HOST"
+    - name: "QSM_MONGODB_HOST"
       description: "Cluster endpoint (writer)"
       sensitive: false
-    - name: "QOVERY_MONGODB_PORT"
+    - name: "QSM_MONGODB_PORT"
       description: "Database port"
       sensitive: false
-    - name: "QOVERY_MONGODB_USERNAME"
+    - name: "QSM_MONGODB_USERNAME"
       description: "Master username"
       sensitive: false
-    - name: "QOVERY_MONGODB_CONNECTION_STRING"
+    - name: "QSM_MONGODB_CONNECTION_STRING"
       description: "MongoDB connection string (without password)"
       sensitive: false
-    - name: "QOVERY_MONGODB_READER_ENDPOINT"
+    - name: "QSM_MONGODB_READER_ENDPOINT"
       description: "Reader endpoint (load-balanced across replicas)"
       sensitive: false
-    - name: "QOVERY_MONGODB_ARN"
+    - name: "QSM_MONGODB_ARN"
       description: "DocumentDB cluster ARN"
       sensitive: false
-    - name: "QOVERY_MONGODB_CLUSTER_ID"
+    - name: "QSM_MONGODB_CLUSTER_ID"
       description: "DocumentDB cluster ID"
       sensitive: false
-    - name: "QOVERY_MONGODB_CLUSTER_IDENTIFIER"
+    - name: "QSM_MONGODB_CLUSTER_IDENTIFIER"
       description: "DocumentDB cluster identifier"
       sensitive: false
-    - name: "QOVERY_MONGODB_INSTANCE_IDS"
+    - name: "QSM_MONGODB_INSTANCE_IDS"
       description: "IDs of the cluster instances"
       sensitive: false
-    - name: "QOVERY_MONGODB_INSTANCE_ENDPOINTS"
+    - name: "QSM_MONGODB_INSTANCE_ENDPOINTS"
       description: "Endpoints of each cluster instance"
       sensitive: false
-    - name: "QOVERY_MONGODB_VPC_ID"
+    - name: "QSM_MONGODB_VPC_ID"
       description: "VPC ID where the cluster is deployed"
       sensitive: false
-    - name: "QOVERY_MONGODB_SECURITY_GROUP_ID"
+    - name: "QSM_MONGODB_SECURITY_GROUP_ID"
       description: "Security group ID attached to the cluster"
       sensitive: false
 

@@ -1,8 +1,8 @@
 # Qovery Service Catalog -- Implementation Plan
 
-> **Status:** Draft v2.0
+> **Status:** Draft v3.0
 > **Date:** 2026-03-10
-> **Scope:** MVP implementation across q-core, engine, console, and the existing `service-catalog` blueprint repository
+> **Scope:** MVP implementation across q-core, console, and the existing `service-catalog` blueprint repository
 
 ---
 
@@ -27,9 +27,9 @@
 | P2 | Custom/private catalogs | **Not supported** | Only the single public Qovery blueprint repo. Private repos deferred. |
 | P3 | Detach feature | **Dropped** | Out of scope entirely. |
 | P4 | MVP provider scope | 4 AWS blueprints (PostgreSQL, MySQL, Redis, MongoDB) already exist. Add one per remaining provider (GCP, Azure, Scaleway) later. | Ship fast with what's already written. |
-| P5 | Dependency model | Loose coupling via environment variables | Services share data through `QOVERY_*` outputs -> auto-computed env vars. No enforced dependency graph. `qsm.yml` `dependencies` field is informational only (UI hints). |
-| P6 | Version selection (MVP) | Always provision the latest published version | Users don't pick a version. Version selector deferred. |
-| P7 | Alias naming | **Enforced pattern:** `{SERVICE_NAME}_{OUTPUT_SUFFIX}` | Deterministic, no collisions, no user configuration needed. Service name "my-database" + output `QOVERY_POSTGRESQL_HOST` -> env var `MY_DATABASE_POSTGRESQL_HOST`. |
+| P5 | Dependency model | Loose coupling via environment variables | Services share data through `QSM_*` outputs -> auto-computed env vars. No enforced dependency graph. `qsm.yml` `dependencies` field is informational only (UI hints). |
+| P6 | Version selection (MVP) | Always fetch from `main` branch | No git tags, no version pinning. q-core resolves `main` to a commit SHA via GitHub API. `metadata.version` in `qsm.yml` is informational only. |
+| P7 | Alias naming | **Enforced pattern:** `{SERVICE_NAME}_{OUTPUT_SUFFIX}` | Deterministic, no collisions, no user configuration needed. Service name "my-database" + output `QSM_POSTGRESQL_HOST` -> env var `MY_DATABASE_POSTGRESQL_HOST`. |
 | P8 | Alias editing | **Not supported** | Aliases are computed from the service name. No alias editing UI or API. |
 | P9 | Provisioning UI | **2 steps:** Name + Variables | No alias step (aliases are automatic). Simpler UX. |
 
@@ -41,15 +41,16 @@
 |---|----------|--------|-----------|
 | T1 | Blueprint repository | Existing `service-catalog` repo (`github.com/Astach/service-catalog`) | Already contains 4 AWS blueprints. Add `qsm.yml` to each. |
 | T2 | Repo structure | One directory per blueprint, flat | `aws/postgresql/`, `aws/redis/`, etc. No version subdirectories. |
-| T3 | Versioning | Git tags with blueprint-name prefix | Tags like `aws-postgresql-v1.0.0`. The `qsm.yml` carries a `version` field that CI validates against the tag. |
-| T4 | Blueprint immutability | CI-enforced | Once a tag is pushed, the files at that commit are frozen. |
-| T5 | q-core fetches blueprints via | **GitHub REST API** | `GET /repos/{owner}/{repo}/contents/{path}?ref={tag}`. No cloning in q-core. |
-| T6 | Caching | **In-memory cache** in q-core (e.g., `ConcurrentHashMap` or Caffeine) | Dataset is tiny (~4-50 blueprints, <100KB total). Read-heavy, write-rare. Invalidated by webhook. No Redis needed for this. |
+| T3 | Versioning | **Always `main` branch** | No git tags. q-core resolves `main` to a commit SHA via GitHub API. `metadata.version` in `qsm.yml` is informational only. |
+| T4 | Output prefix | **`QSM_`** (Qovery Service Manifest) | The `QSM_` prefix is the sole detection mechanism for the AliasBridgeService. Any terraform service whose outputs start with `QSM_*` gets alias env vars created, regardless of how it was created. |
+| T5 | q-core fetches blueprints via | **GitHub REST API** | `GET /repos/{owner}/{repo}/contents/{path}?ref=main`. No cloning in q-core. |
+| T6 | Caching | **In-memory cache** in q-core (`ConcurrentHashMap`) | Dataset is tiny (~4-50 blueprints, <100KB total). Read-heavy, write-rare. Invalidated by webhook. No Redis needed for this. |
 | T7 | Cache invalidation | GitHub webhook -> `POST /internal/catalog/webhook` -> clears in-memory cache | Next request re-fetches from GitHub API. Admin endpoint as fallback. |
-| T8 | New DB table | **None** | No `catalog_service` table. Add 3 columns to existing `terraform` table: `is_from_catalog`, `blueprint_name`, `blueprint_version`. |
-| T9 | Engine changes | Minimal -- add `is_catalog_service` flag | Allow `QOVERY_*` output prefix for catalog services (currently rejected). |
-| T10 | Alias computation | q-core computes deterministically: strip `QOVERY_` prefix, prepend normalized service name | No alias config stored or editable. Convention: `{UPPER_SNAKE_SERVICE_NAME}_{OUTPUT_WITHOUT_QOVERY_PREFIX}`. |
-| T11 | QSM strictness | `qsm.yml` mandatory for catalog blueprints | CI validates against JSON Schema on every PR and tag. |
+| T8 | DB changes | **None** | No new table, no new columns. A catalog-created terraform service is indistinguishable from a regular one in the DB. |
+| T9 | Engine changes | **None** | The engine already accepts any output name matching `^[a-zA-Z_][a-zA-Z0-9_]*$`. No `is_from_catalog` flag needed. |
+| T10 | Alias computation | q-core computes deterministically: strip `QSM_` prefix, prepend normalized service name | No alias config stored or editable. Convention: `{UPPER_SNAKE_SERVICE_NAME}_{OUTPUT_WITHOUT_QSM_PREFIX}`. |
+| T11 | QSM strictness | `qsm.yml` mandatory for catalog blueprints | CI validates against JSON Schema on every PR. |
+| T12 | Future Helm support | The catalog layer is designed to be generic | Dedicated catalog endpoints/controller will later serve Helm blueprints too. |
 
 ---
 
@@ -89,7 +90,7 @@
 1. User navigates to an environment and opens the Service Catalog
 2. The **provider filter is pre-set** to match the environment's cluster cloud provider
 3. User can further filter by category and search by name/tags
-4. Each card shows: icon, name, latest version, category tag, and a "Provision" button
+4. Each card shows: icon, name, version (informational), category tag, and a "Provision" button
 
 ### 3.2 Provisioning a Service
 
@@ -134,7 +135,7 @@
 
 ### 3.3 Managing a Provisioned Service
 
-After provisioning, it appears in the environment's service list as a regular **Terraform Service** with a "catalog" badge showing the blueprint name and version.
+After provisioning, it appears in the environment's service list as a regular **Terraform Service**. There is no special badge or flag -- it's indistinguishable from a manually created terraform service in the DB.
 
 **Available actions (all existing Terraform Service actions):**
 - **View:** Status, variables, Terraform resources, output values, auto-generated env vars
@@ -149,15 +150,15 @@ After provisioning, it appears in the environment's service list as a regular **
 |  Environment "production"                                             |
 |                                                                       |
 |  Services:                                                            |
-|  +-- my-database (terraform, catalog: aws-postgresql v1.0.0)        |
-|  |   auto-generated env vars:                                        |
+|  +-- my-database (terraform)                                         |
+|  |   auto-generated env vars (from QSM_* outputs):                   |
 |  |     MY_DATABASE_POSTGRESQL_HOST     = "mydb.abc.rds.amazonaws.."  |
 |  |     MY_DATABASE_POSTGRESQL_PORT     = "5432"                      |
 |  |     MY_DATABASE_POSTGRESQL_DATABASE = "postgres"                  |
 |  |     MY_DATABASE_POSTGRESQL_USERNAME = "qovery"                    |
 |  |                                                                    |
-|  +-- my-cache (terraform, catalog: aws-redis v1.0.0)                |
-|  |   auto-generated env vars:                                        |
+|  +-- my-cache (terraform)                                            |
+|  |   auto-generated env vars (from QSM_* outputs):                   |
 |  |     MY_CACHE_REDIS_HOST = "cache.xyz.elasticache.amazonaws.com"   |
 |  |     MY_CACHE_REDIS_PORT = "6379"                                  |
 |  |                                                                    |
@@ -169,7 +170,7 @@ After provisioning, it appears in the environment's service list as a regular **
 
 **How it works:**
 1. User provisions "my-database" from aws-postgresql blueprint
-2. After Terraform apply, q-core reads outputs (`QOVERY_POSTGRESQL_HOST`, etc.)
+2. After Terraform apply, q-core reads outputs (`QSM_POSTGRESQL_HOST`, etc.)
 3. q-core computes env var names: `MY_DATABASE` + `_` + `POSTGRESQL_HOST`
 4. Env vars are created at environment scope, available to all services
 5. User's container reads them as standard env vars -- no SDK needed
@@ -190,8 +191,8 @@ After provisioning, it appears in the environment's service list as a regular **
                     |         |                     |                               |
                     |         v                     v                               |
                     |  +--------------+   +-------------------+   +--------------+ |
-                    |  | Blueprint    |   | TerraformService  |   | AliasBridge  | |
-                    |  | Registry     |   | CreationUseCase   |   | Service      | |
+                    |  | Blueprint    |   | TerraformDomain   |   | AliasBridge  | |
+                    |  | Registry     |   | .create()         |   | Service      | |
                     |  | Service      |   | (existing)        |   | (new)        | |
                     |  +------+-------+   +--------+----------+   +------+-------+ |
                     |         |                     |                     |         |
@@ -200,20 +201,21 @@ After provisioning, it appears in the environment's service list as a regular **
                     |  | Cache        |      +-----------+        | Variable     | |
                     |  | (blueprints) |      | terraform |        | (existing)   | |
                     |  +--------------+      | (DB table)|        +--------------+ |
-                    |                        | + 3 cols  |                         |
+                    |                        | NO changes|                         |
                     +------------------------+-----------+-------------------------+
                               |                     |
                     +---------v---------+  +--------v-----------+
                     |  GitHub API       |  |  Redis Streams     |
                     |  (read qsm.yml, |  |  (EngineRequest)   |
-                    |   list tags)      |  +--------+-----------+
+                    |   list dirs)     |  +--------+-----------+
                     +---------+---------+           |
                               |              +------v----------+
                     +---------v---------+    |     Engine      |
                     |  Blueprint Repo   |    |     (Rust)      |
-                    |  (GitHub)         |<---| git clone repo  |
-                    |  service-catalog  |    | terraform apply |
-                    +-------------------+    +------+----------+
+                    |  (GitHub)         |<---| git shallow     |
+                    |  service-catalog  |    | fetch @SHA      |
+                    +-------------------+    | terraform apply |
+                                             +------+----------+
                                                     |
                                              +------v----------+
                                              | Cloud Provider  |
@@ -238,7 +240,7 @@ After provisioning, it appears in the environment's service list as a regular **
    |                |                           |             |               |
    |                |  [cache hit: return]       |             |               |
    |                |  [cache miss: fetch        |             |               |
-   |                |   from GitHub API,         |             |               |
+   |                |   from GitHub API @main,   |             |               |
    |                |   populate cache]          |             |               |
    |                |<--------------------------|             |               |
    |                |                           |             |               |
@@ -247,11 +249,11 @@ After provisioning, it appears in the environment's service list as a regular **
    |                |   from cluster context                  |               |
    |                |-- Merge all variables                   |               |
    |                |                                         |               |
-   |                |-- Create TerraformService (DB)          |               |
+   |                |-- TerraformDomain.create()              |               |
    |                |   {git_url, commit_sha,                 |               |
-   |                |    root_module_path, vars,               |               |
-   |                |    is_from_catalog=true,                 |               |
-   |                |    blueprint_name, blueprint_version}    |               |
+   |                |    root_module_path, vars}              |               |
+   |                |   (standard terraform service,          |               |
+   |                |    no catalog flags)                    |               |
    |                |                                         |               |
    |                |-- Trigger deploy (existing flow)        |               |
    |                |-----------------------------> Redis --->|               |
@@ -259,7 +261,8 @@ After provisioning, it appears in the environment's service list as a regular **
    |  <-- 202 Accepted (terraform service ID) --|             |               |
    |<---------------|                                         |               |
    |                |                                         |               |
-   |                |                                         | git clone     |
+   |                |                                         | git init +    |
+   |                |                                         | shallow fetch |
    |                |                                         | @commit_sha   |
    |                |                                         |               |
    |                |                                         | terraform     |
@@ -270,18 +273,18 @@ After provisioning, it appears in the environment's service list as a regular **
    |                |                                         | terraform     |
    |                |                                         | show -json    |
    |                |                                         | (extract      |
-   |                |                                         |  QOVERY_*     |
    |                |                                         |  outputs)     |
    |                |                                         |               |
    |                |  gRPC: sendTerraformResources           |               |
    |                |<----------------------------------------|               |
    |                |                                         |               |
    |                |-- AliasBridgeService:                   |               |
-   |                |   1. Filter QOVERY_* outputs            |               |
+   |                |   1. Scan outputs for QSM_* prefix      |               |
+   |                |      (no isFromCatalog check)           |               |
    |                |   2. Normalize service name             |               |
    |                |      "my-database" -> "MY_DATABASE"     |               |
-   |                |   3. Strip QOVERY_ prefix               |               |
-   |                |      "QOVERY_POSTGRESQL_HOST"           |               |
+   |                |   3. Strip QSM_ prefix                  |               |
+   |                |      "QSM_POSTGRESQL_HOST"              |               |
    |                |      -> "POSTGRESQL_HOST"               |               |
    |                |   4. Combine:                           |               |
    |                |      "MY_DATABASE_POSTGRESQL_HOST"      |               |
@@ -298,13 +301,12 @@ After provisioning, it appears in the environment's service list as a regular **
  Blueprint Repo       GitHub           q-core
  (developer push)       |                |
        |                |                |
-       |  git push tag  |                |
-       |  aws-pg-v1.1.0 |                |
+       |  git push      |                |
+       |  to main       |                |
        |--------------->|                |
        |                |                |
        |                |  POST /internal/catalog/webhook
-       |                |  {ref: "aws-postgresql-v1.1.0",
-       |                |   type: "tag"}
+       |                |  {ref: "refs/heads/main"}
        |                |--------------->|
        |                |                |
        |                |                |  Clear in-memory cache
@@ -312,8 +314,9 @@ After provisioning, it appears in the environment's service list as a regular **
        |                |                |
        |                |                |  Next API request:
        |                |                |  1. Cache miss
-       |                |                |  2. GET GitHub API /repos/.../tags
-       |                |                |  3. GET qsm.yml for each blueprint
+       |                |                |  2. List dirs from main
+       |                |                |  3. GET qsm.yml for each
+       |                |                |     blueprint at main HEAD
        |                |                |  4. Populate cache
        |                |                |  5. Return response
 ```
@@ -325,20 +328,21 @@ After provisioning, it appears in the environment's service list as a regular **
 |                        Environment                                    |
 |                                                                       |
 |  Terraform Service "my-database"                                      |
-|  (is_from_catalog=true, blueprint: aws-postgresql v1.0.0)            |
+|  (standard terraform service, no catalog flag)                        |
 |  +------------------------------------------------------------+      |
 |  |  Terraform Apply Outputs:                                   |      |
-|  |    QOVERY_POSTGRESQL_HOST       = "mydb.abc.rds.aws.com"   |      |
-|  |    QOVERY_POSTGRESQL_PORT       = "5432"                    |      |
-|  |    QOVERY_POSTGRESQL_DATABASE   = "postgres"                |      |
-|  |    QOVERY_POSTGRESQL_USERNAME   = "qovery"                  |      |
-|  |    QOVERY_POSTGRESQL_CONNECTION_STRING = "postgresql://..."  |      |
+|  |    QSM_POSTGRESQL_HOST       = "mydb.abc.rds.aws.com"      |      |
+|  |    QSM_POSTGRESQL_PORT       = "5432"                       |      |
+|  |    QSM_POSTGRESQL_DATABASE   = "postgres"                   |      |
+|  |    QSM_POSTGRESQL_USERNAME   = "qovery"                     |      |
+|  |    QSM_POSTGRESQL_CONNECTION_STRING = "postgresql://..."     |      |
 |  +-----------------------------+------------------------------+      |
 |                                |                                      |
 |                                v                                      |
 |  Alias Computation (automatic, deterministic):                        |
+|    Detection: outputs have QSM_* prefix (sole trigger)                |
 |    Service name: "my-database" -> "MY_DATABASE"                       |
-|    Strip "QOVERY_" prefix from each output name                       |
+|    Strip "QSM_" prefix from each output name                          |
 |    Prepend normalized service name                                    |
 |                                |                                      |
 |                                v                                      |
@@ -377,11 +381,11 @@ service-catalog/
 |   +-- postgresql/
 |   |   +-- main.tf               (exists)
 |   |   +-- variables.tf          (exists)
-|   |   +-- outputs.tf            (exists, needs QOVERY_ rename)
+|   |   +-- outputs.tf            (exists, QSM_ prefix)
 |   |   +-- providers.tf          (exists)
 |   |   +-- terraform.tfvars.example (exists)
 |   |   +-- README.md             (exists)
-|   |   +-- qsm.yml             (TO ADD)
+|   |   +-- qsm.yml              (added)
 |   +-- mysql/
 |   |   +-- ... (same pattern)
 |   +-- redis/
@@ -390,74 +394,36 @@ service-catalog/
 |       +-- ... (same pattern)
 +-- gcp/                          (empty, future)
 +-- azure/                        (empty, future)
-+-- scaleway/                     (TO ADD, future)
++-- scaleway/                     (future)
 +-- schemas/
-|   +-- qsm-schema.json          (TO ADD)
+|   +-- qsm-schema.json          (added)
 +-- .github/
 |   +-- workflows/
-|       +-- validate.yml          (TO ADD)
+|       +-- validate.yml          (added)
 +-- .gitignore                    (exists)
-+-- README.md                     (TO ADD)
++-- README.md                     (added)
 ```
 
 **Key rules:**
 - One directory per blueprint (never version subdirectories)
 - `main` branch is always the latest working state
-- Published versions are Git tags
+- No git tags for versioning
 
 ### 5.2 How Versioning Works
 
-**Publishing the initial release:**
+There is no tag-based versioning. Blueprints are always fetched from `main`.
+
+**Publishing changes:**
 
 ```bash
-# 1. Add qsm.yml to each blueprint, rename outputs to QOVERY_*
-# 2. qsm.yml contains: version: "1.0.0"
+# 1. Modify or add blueprint files
+# 2. Update metadata.version in qsm.yml if desired (informational only)
 # 3. Merge to main
-
-# 4. Tag each blueprint independently
-git tag aws-postgresql-v1.0.0
-git tag aws-mysql-v1.0.0
-git tag aws-redis-v1.0.0
-git tag aws-mongodb-v1.0.0
-git push origin --tags
-
-# CI validates: tag name matches qsm.yml version field
 # GitHub webhook fires -> q-core in-memory cache cleared
+# Next request fetches fresh data from main
 ```
 
-**Updating an existing blueprint:**
-
-```bash
-# 1. Modify aws/postgresql/main.tf (e.g., add parameter group)
-# 2. Bump aws/postgresql/qsm.yml version to "1.1.0"
-# 3. Merge to main
-# 4. Tag only the changed blueprint
-git tag aws-postgresql-v1.1.0
-git push origin aws-postgresql-v1.1.0
-# Other blueprints are unaffected
-```
-
-**Git history:**
-
-```
-Commit A --- Commit B --- Commit C --- Commit D --- HEAD (main)
-   |                                      |
-   |                                      +-- tag: aws-postgresql-v1.1.0
-   |                                          (added parameter group)
-   |
-   +-- tag: aws-postgresql-v1.0.0
-   +-- tag: aws-mysql-v1.0.0
-   +-- tag: aws-redis-v1.0.0
-   +-- tag: aws-mongodb-v1.0.0
-       (initial releases)
-```
-
-**Key properties:**
-- Tags are immutable. `aws-postgresql-v1.0.0` always points to Commit A.
-- Blueprints are tagged independently.
-- `main` is always ahead of or equal to the latest tags.
-
-### 5.3 How q-core Resolves Versions
+### 5.3 How q-core Resolves Blueprints
 
 ```
 "List all AWS blueprints"
@@ -466,31 +432,23 @@ Commit A --- Commit B --- Commit C --- Commit D --- HEAD (main)
 q-core: Check in-memory cache
         |
         v (cache miss)
-q-core: GET GitHub API /repos/{owner}/{repo}/git/matching-refs/tags/aws-
+q-core: GET GitHub API /repos/{owner}/{repo}/contents/?ref=main
+        to list provider directories (aws/, gcp/, etc.)
         |
         v
-Returns: ["aws-postgresql-v1.0.0", "aws-postgresql-v1.1.0",
-          "aws-mysql-v1.0.0", "aws-redis-v1.0.0", "aws-mongodb-v1.0.0"]
+q-core: For each provider dir, list subdirectories
+        (aws/postgresql/, aws/mysql/, etc.)
         |
         v
-q-core: Group by blueprint name, pick highest semver per blueprint
+q-core: For each blueprint dir, GET qsm.yml at main HEAD
         |
         v
-Result:  aws-postgresql -> v1.1.0 (commit SHA: abc123)
-         aws-mysql      -> v1.0.0 (commit SHA: def456)
-         aws-redis      -> v1.0.0 (commit SHA: def456)
-         aws-mongodb    -> v1.0.0 (commit SHA: def456)
-        |
-        v
-q-core: For each, GET /repos/.../contents/aws/postgresql/qsm.yml?ref=abc123
-        |
-        v
-Parse qsm.yml -> BlueprintResponse -> Store in cache -> Return to UI
+Parse qsm.yml -> Blueprint -> Store in cache -> Return to UI
 ```
 
 ### 5.4 How Provisioned Services Are Pinned
 
-When a user provisions from the catalog, q-core creates a standard Terraform Service with:
+When a user provisions from the catalog, q-core resolves `main` to a commit SHA and creates a standard Terraform Service with:
 
 ```
 terraform table row:
@@ -498,19 +456,16 @@ terraform table row:
   environment_id:     <env-uuid>
   name:               "my-database"
   git_url:            "https://github.com/Astach/service-catalog.git"
-  commit_id:          "abc123def456..."    <- resolved from tag at provision time
+  commit_id:          "abc123def456..."    <- resolved from main at provision time
   root_module_path:   "aws/postgresql"
   variables:          [["qovery_cluster_name","my-cluster"],
                        ["region","eu-west-1"],
                        ["password","s3cr3t",true],
                        ["postgresql_identifier","my-prod-pg"], ...]
   engine:             "TERRAFORM"
-  is_from_catalog:    true                 <- NEW COLUMN
-  blueprint_name:     "aws-postgresql"     <- NEW COLUMN
-  blueprint_version:  "1.1.0"             <- NEW COLUMN
 ```
 
-Even if the blueprint repo evolves, this service stays on its pinned commit SHA. The blueprint version is stored for display purposes.
+No `is_from_catalog`, `blueprint_name`, or `blueprint_version` columns. The terraform service is indistinguishable from any other terraform service in the DB. Even if the blueprint repo evolves, this service stays on its pinned commit SHA.
 
 ---
 
@@ -526,10 +481,10 @@ apiVersion: "qovery.com/v1"
 kind: "ServiceBlueprint"
 
 metadata:
-  # Required. Unique name. Must match the directory path ({provider}/{name}).
+  # Required. Unique name. Must match the directory path ({provider}-{name}).
   name: "aws-postgresql"
 
-  # Required. Semver. Must match the Git tag version suffix.
+  # Required. Semver. Informational only (displayed in catalog UI).
   version: "1.0.0"
 
   # Required. Human-readable description shown in the catalog UI.
@@ -653,29 +608,29 @@ spec:
       uiHint: "text"
 
   # Outputs produced by the blueprint after Terraform apply.
-  # Names MUST start with "QOVERY_" prefix.
+  # Names MUST start with "QSM_" prefix (Qovery Service Manifest).
   # Environment variables are auto-computed as:
-  #   {NORMALIZED_SERVICE_NAME}_{OUTPUT_NAME_WITHOUT_QOVERY_PREFIX}
+  #   {NORMALIZED_SERVICE_NAME}_{OUTPUT_NAME_WITHOUT_QSM_PREFIX}
   outputs:
-    - name: "QOVERY_POSTGRESQL_HOST"
+    - name: "QSM_POSTGRESQL_HOST"
       description: "Database hostname"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_PORT"
+    - name: "QSM_POSTGRESQL_PORT"
       description: "Database port"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_DATABASE"
+    - name: "QSM_POSTGRESQL_DATABASE"
       description: "Default database name"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_USERNAME"
+    - name: "QSM_POSTGRESQL_USERNAME"
       description: "Master username"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_CONNECTION_STRING"
+    - name: "QSM_POSTGRESQL_CONNECTION_STRING"
       description: "Connection string (without password)"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_ENDPOINT"
+    - name: "QSM_POSTGRESQL_ENDPOINT"
       description: "Full endpoint (host:port)"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_ARN"
+    - name: "QSM_POSTGRESQL_ARN"
       description: "RDS instance ARN"
       sensitive: false
 
@@ -711,16 +666,13 @@ q-core resolves `injectedVariables[].source` from the cluster/environment contex
 | Rule | Where |
 |------|-------|
 | `qsm.yml` passes JSON Schema validation | PR CI |
-| `metadata.name` matches `{provider}/{directory-name}` | PR CI |
+| `metadata.name` matches `{provider}-{directory-name}` | PR CI |
 | All `injectedVariables[].name` exist in `variables.tf` | PR CI |
 | All `injectedVariables[].source` are valid source paths | PR CI |
 | All `userVariables[].name` exist in `variables.tf` | PR CI |
-| All `outputs[].name` start with `QOVERY_` | PR CI |
+| All `outputs[].name` start with `QSM_` | PR CI |
 | All `outputs[].name` exist as `output` blocks in `*.tf` | PR CI |
 | `terraform init && terraform validate` passes | PR CI |
-| On tag push: tag version suffix matches `metadata.version` | Tag CI |
-| On tag push: tag prefix matches `metadata.name` (with `/` -> `-`) | Tag CI |
-| No force-push to existing tags | Branch protection rule |
 
 ---
 
@@ -732,17 +684,15 @@ q-core resolves `injectedVariables[].source` from the cluster/environment contex
 
 | # | Task | Description | Priority |
 |---|------|-------------|----------|
-| 0.1 | Rename outputs | In all 4 blueprints, rename outputs in `outputs.tf` to use `QOVERY_` prefix: `QOVERY_POSTGRESQL_*`, `QOVERY_MYSQL_*`, `QOVERY_REDIS_*`, `QOVERY_MONGODB_*` | High |
+| 0.1 | Rename outputs | In all 4 blueprints, rename outputs in `outputs.tf` to use `QSM_` prefix: `QSM_POSTGRESQL_*`, `QSM_MYSQL_*`, `QSM_REDIS_*`, `QSM_MONGODB_*` | High |
 | 0.2 | Add `qsm.yml` to `aws/postgresql/` | Full manifest with injectedVariables, userVariables, outputs (see section 6.1) | High |
 | 0.3 | Add `qsm.yml` to `aws/mysql/` | Same pattern, MySQL-specific | High |
 | 0.4 | Add `qsm.yml` to `aws/redis/` | Same pattern, Redis-specific | High |
 | 0.5 | Add `qsm.yml` to `aws/mongodb/` | Same pattern, MongoDB/DocumentDB-specific | High |
 | 0.6 | Add `schemas/qsm-schema.json` | JSON Schema for `qsm.yml` validation | High |
 | 0.7 | Add root `README.md` | Repo overview, structure, QSM contract reference | Medium |
-| 0.8 | Add CI pipeline | `.github/workflows/validate.yml`: validate qsm.yml, terraform validate, output prefix check, tag/version check | High |
-| 0.9 | Configure branch protection | Prevent force-push to tags, require CI pass on PRs | Medium |
-| 0.10 | Tag initial releases | `aws-postgresql-v1.0.0`, `aws-mysql-v1.0.0`, `aws-redis-v1.0.0`, `aws-mongodb-v1.0.0` | High |
-| 0.11 | Configure GitHub webhook | Webhook on tag/push events pointing to q-core's `/internal/catalog/webhook` | High |
+| 0.8 | Add CI pipeline | `.github/workflows/validate.yml`: validate qsm.yml, terraform validate, output prefix check | High |
+| 0.9 | Configure GitHub webhook | Webhook on push events pointing to q-core's `/internal/catalog/webhook` | High |
 
 ---
 
@@ -752,117 +702,79 @@ q-core resolves `injectedVariables[].source` from the cluster/environment contex
 
 New code goes under `corenetto/src/main/kotlin/com/qovery/corenetto/service/catalog/`. Follows existing patterns from `service/terraform/` and `template/`.
 
-#### 1.1 DB Migration
-
-| # | Task | Description |
-|---|------|-------------|
-| 1.1.1 | Add columns to `terraform` table | Flyway migration: `ALTER TABLE terraform ADD COLUMN is_from_catalog BOOLEAN NOT NULL DEFAULT false; ADD COLUMN blueprint_name TEXT; ADD COLUMN blueprint_version TEXT;` |
-
-#### 1.2 Domain Layer
+#### 1.1 Domain Layer
 
 | # | Task | File | Description |
 |---|------|------|-------------|
-| 1.2.1 | Blueprint domain model | `domain/Blueprint.kt` | Data class: name, version, description, icon, provider, category, tags, engine, engineVersionConstraint, injectedVariables (list), userVariables (list), outputs (list), dependencies (list), resources. Parsed from `qsm.yml`. |
-| 1.2.2 | Catalog exceptions | `domain/CatalogException.kt` | Sealed class: `BlueprintNotFound`, `VariableValidationFailed`, `ProviderMismatch` |
+| 1.1.1 | Blueprint domain model | `domain/Blueprint.kt` | Data class: name, version, description, icon, provider, category, tags, engine, engineVersionConstraint, injectedVariables, userVariables, outputs, dependencies, resources, commitSha, rootModulePath, gitUrl. |
+| 1.1.2 | Catalog exceptions | `domain/CatalogException.kt` | Sealed class: `BlueprintNotFound`, `VariableValidationFailed`, `ProviderMismatch`, `InjectedVariableResolutionFailed`, `BlueprintRegistryUnavailable` |
 
-#### 1.3 Blueprint Registry Service
-
-| # | Task | File | Description |
-|---|------|------|-------------|
-| 1.3.1 | GitHub API client | `service/GitHubBlueprintClient.kt` | HTTP client (Unirest) calling GitHub REST API. Methods: `listTags(prefix)`, `getFileContent(path, ref)`, `resolveTagToSha(tag)`. Auth via GitHub token from config. |
-| 1.3.2 | In-memory cache | `service/BlueprintCache.kt` | `ConcurrentHashMap<String, List<Blueprint>>` keyed by provider. `clearAll()` method for webhook invalidation. Populated on first access per provider. |
-| 1.3.3 | Blueprint registry | `service/BlueprintRegistryService.kt` | Orchestrates: check cache -> miss? fetch from GitHub API -> parse `qsm.yml` -> populate cache -> return. Methods: `listBlueprints(provider, category?)`, `getBlueprint(name)`, `getLatestVersion(name)`. |
-| 1.3.4 | Webhook handler | `service/BlueprintWebhookService.kt` | Receives GitHub webhook payload, validates signature, calls `cache.clearAll()`. |
-| 1.3.5 | Configuration | `config/CatalogConfiguration.kt` | `@ConfigurationProperties("qovery.catalog")`: `github.repo-owner`, `github.repo-name`, `github.token`, `github.webhook-secret`. |
-
-#### 1.4 Use Cases
+#### 1.2 Blueprint Registry Service
 
 | # | Task | File | Description |
 |---|------|------|-------------|
-| 1.4.1 | Query blueprints | `service/BlueprintQueryUseCase.kt` | `listBlueprints(provider, category?)` -- calls registry, applies filters. `getBlueprint(name)` -- returns single blueprint with variables and outputs. |
-| 1.4.2 | Create from catalog | `service/CreateTerraformFromCatalogUseCase.kt` | Accepts: environmentId, blueprintName, serviceName, userVariableValues. Steps: (1) fetch blueprint, (2) resolve latest tag -> commit SHA, (3) validate user vars against `userVariables`, (4) validate provider matches cluster, (5) resolve injected vars from cluster/environment context, (6) merge all variables, (7) delegate to existing `TerraformServiceCreationUseCase` with git_url/commit/path/vars + set `is_from_catalog=true`, `blueprint_name`, `blueprint_version`, (8) trigger deployment. |
-| 1.4.3 | Alias bridge | `service/AliasBridgeService.kt` | Triggered after a catalog Terraform Service deploy completes. Steps: (1) check `is_from_catalog == true`, (2) read `TerraformResource` outputs, (3) filter to `QOVERY_*`, (4) normalize service name (uppercase, hyphens -> underscores), (5) compute env var name: `{NORMALIZED_NAME}_{OUTPUT_WITHOUT_QOVERY_PREFIX}`, (6) create/update `EnvironmentVariable` records via existing system, (7) mark sensitive outputs as secret. |
+| 1.2.1 | GitHub API client | `service/GitHubBlueprintClient.kt` | HTTP client (Unirest) calling GitHub REST API. Methods: `listDirectoryContents(path, ref)`, `getFileContent(path, ref)`, `resolveMainToSha()`. Auth via GitHub token from config. |
+| 1.2.2 | In-memory cache | `service/BlueprintCache.kt` | `ConcurrentHashMap<String, Blueprint>` keyed by blueprint name. `clearAll()` method for webhook invalidation. Populated on first access. |
+| 1.2.3 | Blueprint registry | `service/BlueprintRegistryService.kt` | Orchestrates: check cache -> miss? list directories from `main`, fetch `qsm.yml` from each -> parse -> populate cache -> return. Methods: `listBlueprints(provider?, category?)`, `getBlueprint(name)`. |
+| 1.2.4 | Configuration | `config/CatalogConfiguration.kt` | `@ConfigurationProperties("qovery.catalog")`: `github.repo-owner`, `github.repo-name`, `github.token`, `github.webhook-secret`. |
 
-#### 1.5 Web Layer
+#### 1.3 Use Cases
 
 | # | Task | File | Description |
 |---|------|------|-------------|
-| 1.5.1 | DTOs | `web/CatalogDto.kt` | `BlueprintResponse`, `BlueprintVariableResponse`, `BlueprintOutputResponse`, `CreateFromCatalogRequest` (blueprintName, serviceName, variableValues map), `CreateFromCatalogResponse` (terraformServiceId, blueprintName, blueprintVersion) |
-| 1.5.2 | API interface | `web/CatalogApi.kt` | Endpoint definitions (see table below) |
-| 1.5.3 | Controller | `web/CatalogController.kt` | Thin controller delegating to use cases |
-| 1.5.4 | Webhook controller | `web/CatalogWebhookController.kt` | `POST /internal/catalog/webhook` -- validates GitHub signature, delegates to `BlueprintWebhookService` |
-| 1.5.5 | Security config | Update `SecurityConfiguration.kt` | Add new endpoints with proper auth |
+| 1.3.1 | Create from catalog | `service/CreateTerraformFromCatalogUseCase.kt` | Accepts: environmentId, blueprintName, serviceName, userVariableValues. Steps: (1) fetch blueprint, (2) validate user vars against `userVariables`, (3) validate provider matches cluster, (4) resolve injected vars from cluster/environment context, (5) merge all variables, (6) delegate to `TerraformDomain.create()` with git_url/commit/path/vars. No catalog-specific fields. |
+| 1.3.2 | Alias bridge | `service/AliasBridgeService.kt` | Triggered after ANY Terraform Service deploy completes. Steps: (1) scan output attributes for `QSM_*` prefix (sole detection -- no isFromCatalog check), (2) normalize service name (uppercase, hyphens -> underscores), (3) compute env var name: `{NORMALIZED_NAME}_{OUTPUT_WITHOUT_QSM_PREFIX}`, (4) create/update environment-scoped variables via existing system, (5) mark sensitive outputs as secret. |
+
+#### 1.4 Web Layer
+
+| # | Task | File | Description |
+|---|------|------|-------------|
+| 1.4.1 | DTOs | `web/CatalogDto.kt` | `BlueprintSummaryResponse`, `BlueprintDetailResponse`, `UserVariableResponse`, `BlueprintOutputResponse`, `CreateFromCatalogRequest` (blueprintName, name, variableValues map), `CreateFromCatalogResponse` (id, name) |
+| 1.4.2 | API interface | `web/CatalogApi.kt` | Endpoint definitions (see table below) |
+| 1.4.3 | Controller | `web/CatalogController.kt` | Thin controller delegating to use cases. Webhook handler included. |
+| 1.4.4 | Security config | Update `SecurityConfiguration.kt` | Add webhook endpoint permit rule |
 
 **API Endpoints:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/organization/{orgId}/catalog/blueprints` | List blueprints. Query params: `provider` (required), `category`, `search`. |
-| `GET` | `/api/v1/catalog/blueprint/{blueprintName}` | Get blueprint detail (latest version) with injectedVariables, userVariables, outputs. |
+| `GET` | `/api/v1/organization/{orgId}/catalog/blueprints` | List blueprints. Query params: `provider`, `category`, `search`. |
+| `GET` | `/api/v1/catalog/blueprint/{blueprintName}` | Get blueprint detail with injectedVariables, userVariables, outputs. |
 | `POST` | `/api/v1/environment/{envId}/catalog/terraform` | Create a Terraform Service from a catalog blueprint. Returns the Terraform Service. |
 | `POST` | `/internal/catalog/webhook` | GitHub webhook receiver. |
 | `POST` | `/admin/catalog/cache/invalidate` | Manual cache invalidation. |
 
 Note: All other operations (get/edit/delete/redeploy the provisioned service) use the **existing Terraform Service API** -- no new endpoints needed.
 
-#### 1.6 Hook Into Deployment Completion
+#### 1.5 Hook Into Deployment Completion
 
 | # | Task | Description |
 |---|------|-------------|
-| 1.6.1 | Wire AliasBridgeService | In the existing deployment status callback handler (where `TerraformResourcesCreationUseCase` is called), add a hook: if `terraform.is_from_catalog == true`, call `AliasBridgeService` to compute and create env vars. |
-
-#### 1.7 Update Existing Terraform Persistence
-
-| # | Task | Description |
-|---|------|-------------|
-| 1.7.1 | Update `TerraformJpaEntity` | Add `is_from_catalog`, `blueprint_name`, `blueprint_version` fields |
-| 1.7.2 | Update `Terraform` domain model | Add same fields |
-| 1.7.3 | Update `TerraformDto` | Add `is_from_catalog`, `blueprint_name`, `blueprint_version` to response DTO |
-
-#### 1.8 OpenAPI Spec
-
-| # | Task | Repo |
-|---|------|------|
-| 1.8.1 | Add catalog endpoints | `qovery-openapi-spec` -- add the 3 public + 1 internal + 1 admin endpoints above |
-| 1.8.2 | Update Terraform Service response | Add `is_from_catalog`, `blueprint_name`, `blueprint_version` to existing Terraform response schema |
+| 1.5.1 | Wire AliasBridgeService | In `TerraformResourcesController`, after resources are stored, scan output attributes for `QSM_*` prefix and call `AliasBridgeService` to compute and create env vars. No `isFromCatalog` check needed. |
 
 ---
 
-### Phase 2: Engine -- Minimal Changes
-
-**Repo:** `engine`
-
-| # | Task | File | Description |
-|---|------|------|-------------|
-| 2.1 | Add `is_catalog_service` field | `lib-engine/src/io_models/terraform/mod.rs` | Add `is_catalog_service: bool` to `TerraformService` struct (default `false`). Serde deserialization. |
-| 2.2 | Allow QOVERY_ outputs | `lib-engine/src/environment/resource_extraction/parser.rs` | When `is_catalog_service == true`, skip the `QOVERY_` prefix rejection check on outputs. |
-| 2.3 | Propagate in engine request | `q-core`: `EngineRequest.kt` + `EngineRequestService.kt` | Set `is_catalog_service = true` when `terraform.is_from_catalog == true`. |
-| 2.4 | Tests | `lib-engine/tests/services/terraform_service.rs` | Test: catalog service with `QOVERY_*` outputs passes validation. |
-
----
-
-### Phase 3: Console UI
+### Phase 2: Console UI
 
 **Repo:** `console`
 
 | # | Task | Description |
 |---|------|-------------|
-| 3.1 | Catalog page route | New route: `/organization/{orgId}/project/{projId}/environment/{envId}/catalog` |
-| 3.2 | Blueprint list | Grid of cards. Provider filter (pre-set from cluster). Category filter. Search. |
-| 3.3 | Provisioning wizard | 2-step form: (1) Service Name with env var preview, (2) User Variables (dynamic from blueprint). Calls `POST /environment/{envId}/catalog/terraform`. |
-| 3.4 | Catalog badge on Terraform services | In the environment service list, Terraform Services with `is_from_catalog=true` show a badge: "aws-postgresql v1.0.0". |
-| 3.5 | Auto-generated env vars display | On the Terraform Service detail page, show the computed env var names and values when `is_from_catalog=true`. |
-| 3.6 | Feature flag | Gate behind `service-catalog` feature flag. |
+| 2.1 | Catalog page route | New route: `/organization/{orgId}/project/{projId}/environment/{envId}/catalog` |
+| 2.2 | Blueprint list | Grid of cards. Provider filter (pre-set from cluster). Category filter. Search. |
+| 2.3 | Provisioning wizard | 2-step form: (1) Service Name with env var preview, (2) User Variables (dynamic from blueprint). Calls `POST /environment/{envId}/catalog/terraform`. |
+| 2.4 | Auto-generated env vars display | On the Terraform Service detail page, show the computed env var names and values for services with `QSM_*` outputs. |
+| 2.5 | Feature flag | Gate behind `service-catalog` feature flag. |
 
 ---
 
-### Phase 4: Supporting Tools (Post-MVP)
+### Phase 3: Supporting Tools (Post-MVP)
 
 | # | Task | Repo | Description |
 |---|------|------|-------------|
-| 4.1 | CLI: list blueprints | `qovery-cli` | `qovery catalog list --provider aws --category database` |
-| 4.2 | CLI: provision | `qovery-cli` | `qovery catalog create --blueprint aws-postgresql --name my-db --env <id> --var password=xxx` |
-| 4.3 | TF provider | `terraform-provider-qovery` | Data source `qovery_catalog_blueprints`, update `qovery_terraform_service` resource to accept `blueprint_name` |
+| 3.1 | CLI: list blueprints | `qovery-cli` | `qovery catalog list --provider aws --category database` |
+| 3.2 | CLI: provision | `qovery-cli` | `qovery catalog create --blueprint aws-postgresql --name my-db --env <id> --var password=xxx` |
+| 3.3 | TF provider | `terraform-provider-qovery` | Data source `qovery_catalog_blueprints`, update `qovery_terraform_service` resource to accept `blueprint_name` |
 
 ---
 
@@ -896,60 +808,36 @@ Note: `region`, `qovery_cluster_name`, `vpc_id`, `subnet_ids`, `security_group_i
 ```json
 {
   "id": "tf-svc-uuid-789",
-  "name": "my-database",
-  "is_from_catalog": true,
-  "blueprint_name": "aws-postgresql",
-  "blueprint_version": "1.0.0",
-  "status": "DEPLOYING",
-  "created_at": "2026-03-10T14:30:00Z"
+  "name": "my-database"
 }
 ```
 
 **After successful deployment (GET /api/v1/terraform/tf-svc-uuid-789):**
-```json
-{
-  "id": "tf-svc-uuid-789",
-  "name": "my-database",
-  "is_from_catalog": true,
-  "blueprint_name": "aws-postgresql",
-  "blueprint_version": "1.0.0",
-  "status": "DEPLOYED",
-  "auto_generated_environment_variables": [
-    { "key": "MY_DATABASE_POSTGRESQL_HOST", "value": "my-prod-pg.abc123.eu-west-1.rds.amazonaws.com" },
-    { "key": "MY_DATABASE_POSTGRESQL_PORT", "value": "5432" },
-    { "key": "MY_DATABASE_POSTGRESQL_DATABASE", "value": "postgres" },
-    { "key": "MY_DATABASE_POSTGRESQL_USERNAME", "value": "qovery" },
-    { "key": "MY_DATABASE_POSTGRESQL_CONNECTION_STRING", "value": "postgresql://qovery@my-prod-pg.abc123.eu-west-1.rds.amazonaws.com:5432/postgres" },
-    { "key": "MY_DATABASE_POSTGRESQL_ENDPOINT", "value": "my-prod-pg.abc123.eu-west-1.rds.amazonaws.com:5432" },
-    { "key": "MY_DATABASE_POSTGRESQL_ARN", "value": "arn:aws:rds:eu-west-1:123456789:db:my-prod-pg" }
-  ],
-  "created_at": "2026-03-10T14:30:00Z"
-}
-```
+Standard Terraform Service response. The auto-generated environment variables (`MY_DATABASE_POSTGRESQL_HOST`, etc.) are visible via the existing environment variables API.
 
 ### 8.2 Example: Multi-Service Environment
 
 ```
 Environment "production" on AWS EKS cluster
 |
-+-- "main-db" (terraform, catalog: aws-postgresql v1.0.0)
-|   env vars:
++-- "main-db" (terraform)
+|   env vars (auto-created from QSM_* outputs):
 |     MAIN_DB_POSTGRESQL_HOST             = "main.abc.rds.amazonaws.com"
 |     MAIN_DB_POSTGRESQL_PORT             = "5432"
 |     MAIN_DB_POSTGRESQL_DATABASE         = "postgres"
 |     MAIN_DB_POSTGRESQL_USERNAME         = "qovery"
 |     MAIN_DB_POSTGRESQL_CONNECTION_STRING = "postgresql://..."
 |
-+-- "analytics-db" (terraform, catalog: aws-postgresql v1.0.0)
-|   env vars:
++-- "analytics-db" (terraform)
+|   env vars (auto-created from QSM_* outputs):
 |     ANALYTICS_DB_POSTGRESQL_HOST             = "analytics.def.rds.amazonaws.com"
 |     ANALYTICS_DB_POSTGRESQL_PORT             = "5432"
 |     ANALYTICS_DB_POSTGRESQL_DATABASE         = "analytics"
 |     ANALYTICS_DB_POSTGRESQL_USERNAME         = "qovery"
 |     ANALYTICS_DB_POSTGRESQL_CONNECTION_STRING = "postgresql://..."
 |
-+-- "cache" (terraform, catalog: aws-redis v1.0.0)
-|   env vars:
++-- "cache" (terraform)
+|   env vars (auto-created from QSM_* outputs):
 |     CACHE_REDIS_HOST = "cache.xyz.elasticache.amazonaws.com"
 |     CACHE_REDIS_PORT = "6379"
 |
@@ -984,43 +872,24 @@ const dbHost = process.env.MAIN_DB_POSTGRESQL_HOST;
 const redisHost = process.env.CACHE_REDIS_HOST;
 ```
 
-### 8.4 Example: Version Upgrade Flow (Post-MVP)
-
-```
-Current: "main-db" running aws-postgresql v1.0.0 (commit abc123)
-Available: aws-postgresql v1.1.0 (tag aws-postgresql-v1.1.0, commit def456)
-
-Post-MVP flow:
-1. UI shows "Update available: v1.1.0" badge on the Terraform Service
-2. User clicks "Upgrade"
-3. q-core resolves new tag -> new commit SHA
-4. Updates the Terraform Service's commit_id + blueprint_version
-5. Triggers redeploy
-6. Terraform runs with the new code at the new commit
-```
-
 ---
 
 ## Execution Order & Dependencies
 
 ```
-Phase 0 (Blueprint repo: qsm.yml + output renames + CI + tags)
+Phase 0 (Blueprint repo: qsm.yml + QSM_ output renames + CI)
    |
-   +---> Phase 1.1 (DB migration: 3 columns on terraform table)
+   +---> Phase 1.1 (Domain: Blueprint model + exceptions)
    |        |
-   |        +---> Phase 1.2-1.3 (Domain + Blueprint Registry + Cache)
+   |        +---> Phase 1.2 (Blueprint Registry + Cache + GitHub client)
    |                 |
-   |                 +---> Phase 1.4 (Use Cases: create from catalog + alias bridge)
+   |                 +---> Phase 1.3 (Use Cases: create from catalog + alias bridge)
    |                          |
-   |                          +---> Phase 1.5-1.7 (Web Layer + Hook + Persistence updates)
-   |                          |        |
-   |                          |        +---> Phase 1.8 (OpenAPI Spec)
-   |                          |
-   |                          +---> Phase 2 (Engine: is_catalog_service flag)
-   |                          |
-   |                          +---> Phase 3 (Console UI)
+   |                          +---> Phase 1.4-1.5 (Web Layer + Hook)
+   |                                    |
+   |                                    +---> Phase 2 (Console UI)
    |
-   +---> Phase 4 (CLI + TF Provider) -- post-MVP
+   +---> Phase 3 (CLI + TF Provider) -- post-MVP
 ```
 
-**MVP = Phase 0 + Phase 1 + Phase 2 + Phase 3**
+**MVP = Phase 0 + Phase 1 + Phase 2**

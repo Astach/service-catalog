@@ -111,37 +111,37 @@ spec:
       uiHint: "toggle"
 
   outputs:
-    - name: "QOVERY_MYSQL_HOST"
+    - name: "QSM_MYSQL_HOST"
       description: "Database hostname"
       sensitive: false
-    - name: "QOVERY_MYSQL_PORT"
+    - name: "QSM_MYSQL_PORT"
       description: "Database port"
       sensitive: false
-    - name: "QOVERY_MYSQL_DATABASE"
+    - name: "QSM_MYSQL_DATABASE"
       description: "Default database name"
       sensitive: false
-    - name: "QOVERY_MYSQL_USERNAME"
+    - name: "QSM_MYSQL_USERNAME"
       description: "Master username"
       sensitive: false
-    - name: "QOVERY_MYSQL_CONNECTION_STRING"
+    - name: "QSM_MYSQL_CONNECTION_STRING"
       description: "Connection string (without password)"
       sensitive: false
-    - name: "QOVERY_MYSQL_ENDPOINT"
+    - name: "QSM_MYSQL_ENDPOINT"
       description: "Full endpoint (host:port)"
       sensitive: false
-    - name: "QOVERY_MYSQL_ARN"
+    - name: "QSM_MYSQL_ARN"
       description: "RDS instance ARN"
       sensitive: false
-    - name: "QOVERY_MYSQL_ID"
+    - name: "QSM_MYSQL_ID"
       description: "RDS instance ID"
       sensitive: false
-    - name: "QOVERY_MYSQL_IDENTIFIER"
+    - name: "QSM_MYSQL_IDENTIFIER"
       description: "RDS instance identifier"
       sensitive: false
-    - name: "QOVERY_MYSQL_VPC_ID"
+    - name: "QSM_MYSQL_VPC_ID"
       description: "VPC ID where the instance is deployed"
       sensitive: false
-    - name: "QOVERY_MYSQL_SECURITY_GROUP_ID"
+    - name: "QSM_MYSQL_SECURITY_GROUP_ID"
       description: "Security group ID attached to the instance"
       sensitive: false
 

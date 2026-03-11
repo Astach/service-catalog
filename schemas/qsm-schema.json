@@ -99,7 +99,7 @@
           "items": {
             "$ref": "#/$defs/output"
           },
-          "description": "Outputs produced by the blueprint after Terraform apply. Names must start with 'QOVERY_'."
+          "description": "Outputs produced by the blueprint after Terraform apply. Names must start with 'QSM_'."
         },
         "dependencies": {
           "type": "array",
@@ -210,8 +210,8 @@
       "properties": {
         "name": {
           "type": "string",
-          "pattern": "^QOVERY_[A-Z][A-Z0-9_]*$",
-          "description": "Output name. Must start with 'QOVERY_'."
+          "pattern": "^QSM_[A-Z][A-Z0-9_]*$",
+          "description": "Output name. Must start with 'QSM_' (Qovery Service Manifest)."
         },
         "description": {
           "type": "string",

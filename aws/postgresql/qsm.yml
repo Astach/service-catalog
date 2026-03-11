@@ -114,40 +114,40 @@ spec:
       uiHint: "toggle"
 
   outputs:
-    - name: "QOVERY_POSTGRESQL_HOST"
+    - name: "QSM_POSTGRESQL_HOST"
       description: "Database hostname"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_PORT"
+    - name: "QSM_POSTGRESQL_PORT"
       description: "Database port"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_DATABASE"
+    - name: "QSM_POSTGRESQL_DATABASE"
       description: "Default database name"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_USERNAME"
+    - name: "QSM_POSTGRESQL_USERNAME"
       description: "Master username"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_CONNECTION_STRING"
+    - name: "QSM_POSTGRESQL_CONNECTION_STRING"
       description: "Connection string (without password)"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_ENDPOINT"
+    - name: "QSM_POSTGRESQL_ENDPOINT"
       description: "Full endpoint (host:port)"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_ARN"
+    - name: "QSM_POSTGRESQL_ARN"
       description: "RDS instance ARN"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_ID"
+    - name: "QSM_POSTGRESQL_ID"
       description: "RDS instance ID"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_IDENTIFIER"
+    - name: "QSM_POSTGRESQL_IDENTIFIER"
       description: "RDS instance identifier"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_RESOURCE_ID"
+    - name: "QSM_POSTGRESQL_RESOURCE_ID"
       description: "RDS Resource ID (for IAM auth and CloudWatch)"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_VPC_ID"
+    - name: "QSM_POSTGRESQL_VPC_ID"
       description: "VPC ID where the instance is deployed"
       sensitive: false
-    - name: "QOVERY_POSTGRESQL_SECURITY_GROUP_ID"
+    - name: "QSM_POSTGRESQL_SECURITY_GROUP_ID"
       description: "Security group ID attached to the instance"
       sensitive: false
 

@@ -92,31 +92,31 @@ spec:
       uiHint: "text"
 
   outputs:
-    - name: "QOVERY_REDIS_HOST"
+    - name: "QSM_REDIS_HOST"
       description: "Primary endpoint address (read/write)"
       sensitive: false
-    - name: "QOVERY_REDIS_PORT"
+    - name: "QSM_REDIS_PORT"
       description: "Redis port"
       sensitive: false
-    - name: "QOVERY_REDIS_CONNECTION_STRING"
+    - name: "QSM_REDIS_CONNECTION_STRING"
       description: "Redis connection string (without password, with TLS)"
       sensitive: false
-    - name: "QOVERY_REDIS_READER_ENDPOINT"
+    - name: "QSM_REDIS_READER_ENDPOINT"
       description: "Reader endpoint address (load-balanced)"
       sensitive: false
-    - name: "QOVERY_REDIS_ARN"
+    - name: "QSM_REDIS_ARN"
       description: "ElastiCache replication group ARN"
       sensitive: false
-    - name: "QOVERY_REDIS_ID"
+    - name: "QSM_REDIS_ID"
       description: "ElastiCache replication group ID"
       sensitive: false
-    - name: "QOVERY_REDIS_REPLICATION_GROUP_ID"
+    - name: "QSM_REDIS_REPLICATION_GROUP_ID"
       description: "Replication group identifier"
       sensitive: false
-    - name: "QOVERY_REDIS_VPC_ID"
+    - name: "QSM_REDIS_VPC_ID"
       description: "VPC ID where ElastiCache is deployed"
       sensitive: false
-    - name: "QOVERY_REDIS_SECURITY_GROUP_ID"
+    - name: "QSM_REDIS_SECURITY_GROUP_ID"
       description: "Security group ID attached to the cluster"
       sensitive: false
 
