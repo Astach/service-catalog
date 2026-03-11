@@ -22,14 +22,14 @@ service-catalog/
 
 Each blueprint directory contains:
 
-| File | Description |
-|------|-------------|
-| `main.tf` | Terraform resources |
-| `variables.tf` | Input variables |
-| `outputs.tf` | Outputs (prefixed with `QSM_`) |
-| `providers.tf` | Provider configuration |
-| `qsm.yml` | Qovery Service Manifest |
-| `README.md` | Blueprint documentation |
+| File           | Description                    |
+| -------------- | ------------------------------ |
+| `main.tf`      | Terraform resources            |
+| `variables.tf` | Input variables                |
+| `outputs.tf`   | Outputs (prefixed with `QSM_`) |
+| `providers.tf` | Provider configuration         |
+| `qsm.yml`      | Qovery Service Manifest        |
+| `README.md`    | Blueprint documentation        |
 
 ## QSM (Qovery Service Manifest)
 
@@ -62,7 +62,7 @@ Catalog services use an automatic alias bridge to expose Terraform outputs as en
 {UPPER_SNAKE_SERVICE_NAME}_{OUTPUT_NAME_WITHOUT_QSM_PREFIX}
 ```
 
-4. These environment variables are created at **environment scope**, so every other service in the environment can read them.
+1. These environment variables are created at **environment scope**, so every other service in the environment can read them.
 
 ### Detection mechanism
 
@@ -72,12 +72,12 @@ The `QSM_` prefix is the sole detection mechanism. Any terraform service whose o
 
 A user provisions the `aws-postgresql` blueprint and names the service `my-database`.
 
-| Terraform output | Environment variable |
-|---|---|
-| `QSM_POSTGRESQL_HOST` | `MY_DATABASE_POSTGRESQL_HOST` |
-| `QSM_POSTGRESQL_PORT` | `MY_DATABASE_POSTGRESQL_PORT` |
-| `QSM_POSTGRESQL_DATABASE` | `MY_DATABASE_POSTGRESQL_DATABASE` |
-| `QSM_POSTGRESQL_USERNAME` | `MY_DATABASE_POSTGRESQL_USERNAME` |
+| Terraform output                   | Environment variable                       |
+| ---------------------------------- | ------------------------------------------ |
+| `QSM_POSTGRESQL_HOST`              | `MY_DATABASE_POSTGRESQL_HOST`              |
+| `QSM_POSTGRESQL_PORT`              | `MY_DATABASE_POSTGRESQL_PORT`              |
+| `QSM_POSTGRESQL_DATABASE`          | `MY_DATABASE_POSTGRESQL_DATABASE`          |
+| `QSM_POSTGRESQL_USERNAME`          | `MY_DATABASE_POSTGRESQL_USERNAME`          |
 | `QSM_POSTGRESQL_CONNECTION_STRING` | `MY_DATABASE_POSTGRESQL_CONNECTION_STRING` |
 
 The service name is normalized: lowercased with hyphens/spaces replaced by underscores, then uppercased (`my-database` -> `MY_DATABASE`).
@@ -89,16 +89,6 @@ Because each service has a unique name within an environment, the prefix is alwa
 ```
 MAIN_DB_POSTGRESQL_HOST       = "main.abc.rds.amazonaws.com"
 ANALYTICS_DB_POSTGRESQL_HOST  = "analytics.def.rds.amazonaws.com"
-```
-
-### Consuming the variables
-
-Other services (containers, jobs) read them as plain environment variables -- no SDK required:
-
-```python
-import os
-db_host = os.environ["MY_DATABASE_POSTGRESQL_HOST"]
-redis_host = os.environ["MY_CACHE_REDIS_HOST"]
 ```
 
 ### Rules for blueprint authors
