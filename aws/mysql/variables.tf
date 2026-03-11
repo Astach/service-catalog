@@ -133,7 +133,16 @@ variable "ca_cert_identifier" {
 variable "database_name" {
   description = "Name of the default database to create"
   type        = string
-  default     = "mysql"
+
+  validation {
+    condition     = var.database_name != "mysql"
+    error_message = "DBName mysql cannot be used.  It is a reserved word for this engine"
+  }
+
+  validation {
+    condition     = can(regex("^[a-zA-Z][a-zA-Z0-9]*$", var.database_name))
+    error_message = "DBName must begin with a letter and contain only alphanumeric characters."
+  }
 }
 
 variable "username" {
