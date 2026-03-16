@@ -6,15 +6,10 @@ metadata:
   version: "1.0.0"
   description: "Provision an AWS ElastiCache Redis cluster with TLS, at-rest encryption, and automated snapshots"
   icon: "https://cdn.qovery.com/icons/aws-elasticache-redis.svg"
-  tags:
-    - "cache"
-    - "redis"
-    - "elasticache"
-    - "in-memory"
 
 spec:
   provider: "aws"
-  category: "cache"
+  categories: ["cache"]
   engine: "terraform"
   engineVersionConstraint: ">= 1.5"
 
@@ -39,19 +34,16 @@ spec:
       type: "string"
       required: true
       description: "ElastiCache replication group identifier (max 40 characters)"
-      uiHint: "text"
     - name: "auth_token"
       type: "string"
       required: true
       description: "Redis auth token (password)"
-      uiHint: "password"
       sensitive: true
     - name: "node_type"
       type: "string"
       required: false
       default: "cache.t4g.micro"
       description: "ElastiCache node type"
-      uiHint: "dropdown"
       options:
         - "cache.t4g.micro"
         - "cache.t4g.small"
@@ -64,32 +56,27 @@ spec:
       required: false
       default: "7.0"
       description: "Redis engine version"
-      uiHint: "dropdown"
       options: ["6.2", "7.0", "7.1"]
     - name: "num_cache_clusters"
       type: "number"
       required: false
       default: "1"
       description: "Number of cache nodes in the replication group"
-      uiHint: "text"
     - name: "encrypt_disk"
       type: "bool"
       required: false
       default: "true"
       description: "Enable at-rest encryption"
-      uiHint: "toggle"
     - name: "transit_encryption_enabled"
       type: "bool"
       required: false
       default: "true"
       description: "Enable in-transit encryption (TLS)"
-      uiHint: "toggle"
     - name: "snapshot_retention_limit"
       type: "number"
       required: false
       default: "14"
       description: "Number of days to retain automatic snapshots (0 to disable)"
-      uiHint: "text"
 
   outputs:
     - name: "QSM_REDIS_HOST"
@@ -121,8 +108,3 @@ spec:
       sensitive: false
 
   dependencies: []
-
-  resources:
-    defaultCpu: 500
-    defaultRam: 512
-    defaultTimeout: 20

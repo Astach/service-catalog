@@ -6,15 +6,10 @@ metadata:
   version: "1.0.0"
   description: "Provision an AWS RDS MySQL instance with encryption, automated backups, and enhanced monitoring"
   icon: "https://cdn.qovery.com/icons/aws-rds-mysql.svg"
-  tags:
-    - "database"
-    - "mysql"
-    - "rds"
-    - "relational"
 
 spec:
   provider: "aws"
-  category: "database"
+  categories: ["database"]
   engine: "terraform"
   engineVersionConstraint: ">= 1.5"
 
@@ -39,19 +34,16 @@ spec:
       type: "string"
       required: true
       description: "Unique identifier for the RDS instance"
-      uiHint: "text"
     - name: "password"
       type: "string"
       required: true
       description: "Master password (minimum 9 characters)"
-      uiHint: "password"
       sensitive: true
     - name: "instance_class"
       type: "string"
       required: false
       default: "db.t3.micro"
       description: "RDS instance class"
-      uiHint: "dropdown"
       options:
         - "db.t3.micro"
         - "db.t3.small"
@@ -65,50 +57,42 @@ spec:
       required: false
       default: "8.0"
       description: "MySQL engine version"
-      uiHint: "dropdown"
       options: ["5.7", "8.0"]
     - name: "disk_size"
       type: "number"
       required: false
       default: "20"
       description: "Storage size in GB"
-      uiHint: "text"
     - name: "multi_az"
       type: "bool"
       required: false
       default: "true"
       description: "Deploy across multiple availability zones for high availability"
-      uiHint: "toggle"
     - name: "database_name"
       type: "string"
       required: false
       default: "mysql"
       description: "Name of the default database"
-      uiHint: "text"
     - name: "username"
       type: "string"
       required: false
       default: "qovery"
       description: "Master username"
-      uiHint: "text"
     - name: "encrypt_disk"
       type: "bool"
       required: false
       default: "true"
       description: "Enable storage encryption at rest"
-      uiHint: "toggle"
     - name: "backup_retention_period"
       type: "number"
       required: false
       default: "14"
       description: "Number of days to retain automated backups"
-      uiHint: "text"
     - name: "publicly_accessible"
       type: "bool"
       required: false
       default: "false"
       description: "Make the database publicly accessible"
-      uiHint: "toggle"
 
   outputs:
     - name: "QSM_MYSQL_HOST"
@@ -148,8 +132,3 @@ spec:
   dependencies:
     - blueprint: "aws-secrets-manager"
       reason: "Store database credentials securely with automatic rotation"
-
-  resources:
-    defaultCpu: 500
-    defaultRam: 512
-    defaultTimeout: 30

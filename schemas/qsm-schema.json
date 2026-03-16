@@ -42,22 +42,12 @@
           "type": "string",
           "format": "uri",
           "description": "URL to an icon image for the catalog card."
-        },
-        "tags": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 50
-          },
-          "uniqueItems": true,
-          "description": "Tags for search and filtering."
         }
       }
     },
     "spec": {
       "type": "object",
-      "required": ["provider", "category", "engine", "injectedVariables", "userVariables", "outputs"],
+      "required": ["provider", "categories", "engine", "injectedVariables", "userVariables", "outputs"],
       "additionalProperties": false,
       "properties": {
         "provider": {
@@ -65,10 +55,15 @@
           "enum": ["aws", "gcp", "azure", "scaleway"],
           "description": "Cloud provider. Used for filtering blueprints."
         },
-        "category": {
-          "type": "string",
-          "enum": ["storage", "database", "cache", "messaging", "networking", "compute", "security", "monitoring", "other"],
-          "description": "Service category. Used for filtering blueprints."
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["storage", "database", "cache", "messaging", "networking", "compute", "security", "monitoring", "other"]
+          },
+          "description": "Service categories. Used for filtering blueprints."
         },
         "engine": {
           "type": "string",
@@ -107,10 +102,6 @@
             "$ref": "#/$defs/dependency"
           },
           "description": "Informational only. Shown as 'You might also need...' in the UI."
-        },
-        "resources": {
-          "$ref": "#/$defs/resources",
-          "description": "Default resource allocation for the Terraform Job."
         }
       }
     }
@@ -173,11 +164,6 @@
           "type": "boolean",
           "description": "If true, value is masked in the UI and stored as a secret."
         },
-        "uiHint": {
-          "type": "string",
-          "enum": ["text", "password", "dropdown", "toggle", "textarea"],
-          "description": "Hint for the UI rendering."
-        },
         "options": {
           "type": "array",
           "items": {
@@ -235,30 +221,6 @@
         "reason": {
           "type": "string",
           "description": "Why this dependency is recommended."
-        }
-      }
-    },
-    "resources": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "defaultCpu": {
-          "type": "integer",
-          "minimum": 100,
-          "maximum": 8000,
-          "description": "Default CPU in millicores."
-        },
-        "defaultRam": {
-          "type": "integer",
-          "minimum": 128,
-          "maximum": 16384,
-          "description": "Default RAM in MiB."
-        },
-        "defaultTimeout": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 120,
-          "description": "Default timeout in minutes."
         }
       }
     }

@@ -6,15 +6,10 @@ metadata:
   version: "1.0.0"
   description: "Provision an AWS DocumentDB (MongoDB-compatible) cluster with encryption and automated backups"
   icon: "https://cdn.qovery.com/icons/aws-documentdb-mongodb.svg"
-  tags:
-    - "database"
-    - "mongodb"
-    - "documentdb"
-    - "nosql"
 
 spec:
   provider: "aws"
-  category: "database"
+  categories: ["database"]
   engine: "terraform"
   engineVersionConstraint: ">= 1.5"
 
@@ -39,19 +34,16 @@ spec:
       type: "string"
       required: true
       description: "DocumentDB cluster identifier"
-      uiHint: "text"
     - name: "password"
       type: "string"
       required: true
       description: "Master password (minimum 9 characters)"
-      uiHint: "password"
       sensitive: true
     - name: "instance_class"
       type: "string"
       required: false
       default: "db.t3.medium"
       description: "DocumentDB instance class"
-      uiHint: "dropdown"
       options:
         - "db.t3.medium"
         - "db.r5.large"
@@ -64,32 +56,27 @@ spec:
       required: false
       default: "5.0"
       description: "DocumentDB engine version"
-      uiHint: "dropdown"
       options: ["4.0", "5.0"]
     - name: "instances_number"
       type: "number"
       required: false
       default: "1"
       description: "Number of instances in the cluster"
-      uiHint: "text"
     - name: "username"
       type: "string"
       required: false
       default: "qovery"
       description: "Master username"
-      uiHint: "text"
     - name: "encrypt_disk"
       type: "bool"
       required: false
       default: "true"
       description: "Enable storage encryption at rest"
-      uiHint: "toggle"
     - name: "backup_retention_period"
       type: "number"
       required: false
       default: "14"
       description: "Number of days to retain automated backups (1-35)"
-      uiHint: "text"
 
   outputs:
     - name: "QSM_MONGODB_HOST"
@@ -130,8 +117,3 @@ spec:
       sensitive: false
 
   dependencies: []
-
-  resources:
-    defaultCpu: 500
-    defaultRam: 512
-    defaultTimeout: 30
