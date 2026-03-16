@@ -1,4 +1,4 @@
-apiVersion: qovery.com/v1
+apiVersion: "qovery.com/v2"
 kind: ServiceBlueprint
 
 metadata:
@@ -6,32 +6,37 @@ metadata:
   version: "1.0.0"
   description: "Provision an AWS RDS PostgreSQL instance with encryption, automated backups, and enhanced monitoring"
   icon: "https://cdn.qovery.com/icons/aws-rds-postgresql.svg"
+  categories:
+    - "database"
+    - "postgresql"
+    - "rds"
 
 spec:
   provider: "aws"
-  categories: ["database"]
-  engine: "terraform"
-  engineVersionConstraint: ">= 1.5"
 
-  # Variables auto-filled by q-core from environment/cluster context.
-  # Never shown to the user.
-  injectedVariables:
+  qoveryVariables:
     - name: "qovery_cluster_name"
       source: "cluster.name"
+      overridable: false
     - name: "region"
       source: "cluster.region"
+      overridable: true
     - name: "qovery_environment_id"
       source: "environment.id"
+      overridable: false
     - name: "qovery_project_id"
       source: "project.id"
+      overridable: false
     - name: "vpc_id"
       source: "cluster.vpc_id"
+      overridable: true
     - name: "subnet_ids"
       source: "cluster.subnet_ids"
+      overridable: true
     - name: "security_group_ids"
       source: "cluster.security_group_ids"
+      overridable: true
 
-  # Variables shown to the user in the provisioning form.
   userVariables:
     - name: "postgresql_identifier"
       type: "string"
@@ -47,20 +52,11 @@ spec:
       required: false
       default: "db.t3.micro"
       description: "RDS instance class"
-      options:
-        - "db.t3.micro"
-        - "db.t3.small"
-        - "db.t3.medium"
-        - "db.t3.large"
-        - "db.r6g.large"
-        - "db.r6g.xlarge"
-        - "db.r6g.2xlarge"
     - name: "postgresql_version"
       type: "string"
       required: false
       default: "16"
       description: "PostgreSQL engine version"
-      options: ["14", "15", "16", "17"]
     - name: "disk_size"
       type: "number"
       required: false
@@ -98,43 +94,39 @@ spec:
       description: "Make the database publicly accessible"
 
   outputs:
-    - name: "QSM_POSTGRESQL_HOST"
+    - name: "postgresql_host"
       description: "Database hostname"
       sensitive: false
-    - name: "QSM_POSTGRESQL_PORT"
+    - name: "postgresql_port"
       description: "Database port"
       sensitive: false
-    - name: "QSM_POSTGRESQL_DATABASE"
+    - name: "postgresql_database"
       description: "Default database name"
       sensitive: false
-    - name: "QSM_POSTGRESQL_USERNAME"
+    - name: "postgresql_username"
       description: "Master username"
       sensitive: false
-    - name: "QSM_POSTGRESQL_CONNECTION_STRING"
+    - name: "postgresql_connection_string"
       description: "Connection string (without password)"
       sensitive: false
-    - name: "QSM_POSTGRESQL_ENDPOINT"
+    - name: "postgresql_endpoint"
       description: "Full endpoint (host:port)"
       sensitive: false
-    - name: "QSM_POSTGRESQL_ARN"
+    - name: "postgresql_arn"
       description: "RDS instance ARN"
       sensitive: false
-    - name: "QSM_POSTGRESQL_ID"
+    - name: "postgresql_id"
       description: "RDS instance ID"
       sensitive: false
-    - name: "QSM_POSTGRESQL_IDENTIFIER"
+    - name: "postgresql_identifier"
       description: "RDS instance identifier"
       sensitive: false
-    - name: "QSM_POSTGRESQL_RESOURCE_ID"
+    - name: "postgresql_resource_id"
       description: "RDS Resource ID (for IAM auth and CloudWatch)"
       sensitive: false
-    - name: "QSM_POSTGRESQL_VPC_ID"
+    - name: "postgresql_vpc_id"
       description: "VPC ID where the instance is deployed"
       sensitive: false
-    - name: "QSM_POSTGRESQL_SECURITY_GROUP_ID"
+    - name: "postgresql_security_group_id"
       description: "Security group ID attached to the instance"
       sensitive: false
-
-  dependencies:
-    - blueprint: "aws-secrets-manager"
-      reason: "Store database credentials securely with automatic rotation"

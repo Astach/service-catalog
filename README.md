@@ -1,373 +1,189 @@
 # Qovery Service Catalog
 
-Pre-built infrastructure blueprints for provisioning cloud resources through the Qovery platform. Supports Terraform, OpenTofu, and Helm engines.
+Pre-built blueprints for provisioning cloud resources and Qovery services through the catalog. Uses **Terraform** with a **plan → review → approve** workflow. Supports any Terraform provider (AWS, GCP, Helm, Qovery, etc.).
+
+## How It Works
+
+1. User selects a blueprint from the catalog
+2. Fills in variables (Qovery variables are pre-filled from cluster/env context)
+3. Engine runs `terraform plan` -- user reviews what will be created/changed/destroyed
+4. User approves -- engine runs `terraform apply`
+5. Resources created. Service tracked in the catalog DB (blueprint name + version + TF state).
 
 ## Repository Structure
 
 ```
 service-catalog/
-├── aws/
-│   ├── postgresql/    # AWS RDS PostgreSQL
-│   ├── mysql/         # AWS RDS MySQL
-│   ├── redis/         # AWS ElastiCache Redis
-│   └── mongodb/       # AWS DocumentDB (MongoDB-compatible)
-├── gcp/               # (future)
-├── azure/             # (future)
+├── v2/
+│   ├── examples/
+│   │   ├── aws-s3/                    # S3 bucket (provider: aws)
+│   │   ├── managed-postgresql/        # Managed DB (provider: qovery)
+│   │   ├── helm-prometheus/           # Prometheus stack (provider: helm)
+│   │   └── web-app-with-database/     # App + DB + Redis stack (StackBlueprint, qsm.yml only)
+│   ├── DESIGN.md
+│   └── OPERATIONS.md
 ├── schemas/
-│   └── qsm-schema.json   # JSON Schema for qsm.yml validation
-└── .github/
-    └── workflows/
-        ├── validate.yml   # PR CI: schema + terraform validation
-        └── release.yml    # Release CI: tag validation + compat check
+│   └── qsm-schema.json
+├── diagrams/
+│   └── workflows.md
+└── PLAN.md
 ```
 
-Each blueprint directory contains:
+Each blueprint contains:
 
-| File           | Description                    |
-| -------------- | ------------------------------ |
-| `main.tf`      | Terraform resources            |
-| `variables.tf` | Input variables                |
-| `outputs.tf`   | Outputs (prefixed with `QSM_`) |
-| `providers.tf` | Provider configuration         |
-| `qsm.yml`      | Qovery Service Manifest        |
-| `README.md`    | Blueprint documentation        |
+| File | Description |
+|------|-------------|
+| `main.tf` | Terraform resources (any provider) |
+| `variables.tf` | Qovery + user variables |
+| `outputs.tf` | Terraform outputs |
+| `providers.tf` | Provider configuration |
+| `qsm.yml` | Qovery Service Manifest |
+
+## Providers
+
+`spec.provider` in the QSM determines what credentials the engine injects:
+
+| Provider | What blueprints create | Credentials |
+|----------|----------------------|-------------|
+| `aws` | S3, RDS, SQS, IAM, ELB... (any `aws_*` resource) | AWS creds from cluster config |
+| `gcp` | GCS, Cloud SQL, Pub/Sub... (any `google_*` resource) | GCP SA from cluster config |
+| `azure` | Storage, SQL, Service Bus... (any `azurerm_*` resource) | Azure SP from cluster config |
+| `qovery` | Databases, containers, apps, jobs... (`qovery_*` resources) | `QOVERY_API_TOKEN` |
+| `helm` | Any Helm chart via `helm_release` | Kubeconfig from cluster |
+
+---
+
+## Why Not Use the Qovery Terraform Provider for Everything?
+
+An earlier iteration of this catalog used the Qovery Terraform provider (`Qovery/qovery`) as the sole blueprint engine. Every service -- databases, containers, apps -- was declared as `qovery_*` resources. This sounded clean but has fundamental problems:
+
+### 1. Limited resource coverage
+
+The Qovery provider supports a fixed set of service types (`qovery_database`, `qovery_container`, `qovery_application`, `qovery_helm`, `qovery_job`). It does **not** expose raw cloud resources. There is no `qovery_s3_bucket`, no `qovery_sqs_queue`, no `qovery_load_balancer`. Every new cloud service would need to be implemented in the provider first -- a Go resource, an API endpoint, and backend logic -- before it could appear in the catalog.
+
+### 2. Double maintenance burden
+
+To add a new service (say SQS) to the catalog, you'd need to:
+1. Add a `qovery_sqs_queue` resource to the Qovery Terraform provider (Go)
+2. Add the corresponding API endpoint to q-core
+3. Add the backend provisioning logic
+4. **Then** write the catalog blueprint
+
+With native providers, step 1 is just writing `aws_sqs_queue` in a `.tf` file. Done.
+
+### 3. Qovery-specific abstractions leak into user-facing config
+
+The Qovery provider has its own conventions. `qovery_database` uses `mode = "MANAGED"`, `type = "POSTGRESQL"`, `accessibility = "PRIVATE"` -- these are Qovery-specific field names that don't match AWS/GCP/Azure terminology. Users who know AWS have to learn Qovery's abstraction layer instead of using the resources they already understand.
+
+### 4. Customers can't bring their own blueprints
+
+If the catalog only speaks `qovery_*`, customers can't contribute or customize blueprints using standard Terraform knowledge. They'd need to learn the Qovery provider's resource model. With native providers, a customer who has an existing Terraform module for RDS or S3 can wrap it in a QSM and add it to the catalog with minimal changes.
+
+### 5. The Qovery provider is a middleman, not a simplification
+
+For managed databases, the Qovery provider calls the Qovery API, which calls the cloud provider API. It adds a layer of indirection without adding value for the catalog use case. The plan shows `qovery_database` instead of `aws_db_instance`, which is **less** informative -- the user loses visibility into what's actually being created in their cloud account.
+
+### What the Qovery provider IS good for
+
+The Qovery provider makes sense for managing **Qovery-native concepts**: environments, deployment stages, deployment triggers, container registries, projects. These are things that only exist in Qovery and have no cloud-native equivalent. Blueprints with `provider: "qovery"` are appropriate for these.
+
+---
 
 ## QSM (Qovery Service Manifest)
 
-Every blueprint requires a `qsm.yml` file that describes the blueprint for the catalog. Key sections:
+Every blueprint has a `qsm.yml`:
 
-- **metadata**: name, version, description, tags
-- **spec.provider**: Cloud provider (aws, gcp, azure, scaleway, ...)
-- **spec.engine**: IaC engine (terraform, opentofu, helm)
-- **spec.injectedVariables**: Variables auto-filled from cluster/environment context (hidden from user)
-- **spec.userVariables**: Variables shown in the provisioning form
-- **spec.outputs**: Outputs exposed as environment variables
-- **spec.helm**: Helm chart configuration (required when engine is `helm`)
+```yaml
+apiVersion: "qovery.com/v2"
+kind: ServiceBlueprint       # or StackBlueprint
 
-See `schemas/qsm-schema.json` for the full schema.
+metadata:
+  name: "aws-s3"
+  version: "1.0.0"
+  description: "S3 bucket with encryption"
+  icon: "https://..."
+  categories: ["storage"]
+
+spec:
+  provider: "aws"             # credential selector
+
+  qoveryVariables:            # auto-filled from cluster/env context
+    - name: "region"
+      source: "cluster.region"
+      overridable: true       # user can override (default: false)
+
+  userVariables:              # shown in provisioning form
+    - name: "bucket_name"
+      type: "string"
+      required: true
+      description: "S3 bucket name"
+
+  outputs:
+    - name: "bucket_arn"
+      description: "Bucket ARN"
+      sensitive: false
+```
+
+### StackBlueprint
+
+StackBlueprints compose existing ServiceBlueprints. They have no Terraform files -- just a QSM that references catalog blueprints, pre-configures variables, and defines deployment stages.
+
+```yaml
+apiVersion: "qovery.com/v2"
+kind: StackBlueprint
+
+metadata:
+  name: "production-stack"
+  version: "1.0.0"
+  categories: ["stack", "database"]
+
+spec:
+  stages:
+    - name: "databases"
+      services:
+        - blueprint: "aws-postgresql"
+          version: ">=1.0.0 <2.0.0"
+          alias: "main-db"
+          variables:
+            instance_class: "db.r6g.large"
+    - name: "applications"
+      services:
+        - blueprint: "container-app"
+          version: "1.0.0"
+          alias: "api"
+```
+
+Stages execute sequentially. Services within a stage run in parallel. Each service gets its own independent plan and TF state. Version constraints: exact (`"1.2.0"`), train (`"1.x"`), or range (`">=1.0.0 <2.0.0"`).
 
 ---
 
 ## Versioning
 
-Blueprints follow **semantic versioning** (semver) enforced through **git tags**. Each version is an immutable snapshot of a blueprint at a specific commit.
-
-### Git Tag Convention
+Git-tag-based semver: `{blueprint-name}/{major}.{minor}.{patch}`
 
 ```
-Format:    {blueprint-name}/{major}.{minor}.{patch}
-
-Examples:  aws-postgresql/1.0.0
-           aws-postgresql/1.1.0
-           aws-postgresql/2.0.0
-           aws-redis/1.0.0
+aws-s3/1.0.0
+managed-postgresql/1.1.0
+helm-prometheus/1.0.0
 ```
 
-- The `main` branch is always the latest development state.
-- Git tags mark immutable release snapshots.
-- `metadata.version` in `qsm.yml` **must match** the git tag version.
-
-### Version Pinning
-
-When provisioning a service from the catalog, users select a specific version. q-core resolves the git tag to a commit SHA for deterministic deployments.
-
-**At provisioning time:**
-
-```
-User selects "aws-postgresql v1.2.0"
-  -> q-core resolves tag "aws-postgresql/1.2.0" to commit SHA abc123
-  -> Terraform Service is created with commit_sha=abc123
-  -> All future redeploys use the same SHA until upgraded
-```
-
-**In EnvBlueprints** (multi-service composition files), version pinning supports three formats:
-
-| Format    | Example            | Behavior                                                                       |
-| --------- | ------------------ | ------------------------------------------------------------------------------ |
-| **Exact** | `"1.2.0"`          | Resolves to exactly version 1.2.0. Fully deterministic.                        |
-| **Train** | `"1.x"`            | Resolves to the latest `1.*.*` release. Auto-follows minor/patch within major. |
-| **Range** | `">=1.1.0 <2.0.0"` | Resolves to the latest version matching the constraint.                        |
-
-Example StackBlueprint with version pinning:
-
-```yaml
-apiVersion: "qovery.com/v1"
-kind: "StackBlueprint"
-metadata:
-  name: "my-stack"
-  version: "1.0.0"
-  description: "Production environment"
-spec:
-  services:
-    - blueprint: "aws-postgresql"
-      version: "1.2.0" # Exact pin -- always 1.2.0
-      alias: "main-db"
-
-    - blueprint: "aws-redis"
-      version: "1.x" # Train -- latest 1.x.x release
-      alias: "cache"
-
-    - blueprint: "aws-postgresql"
-      version: ">=1.1.0 <2.0.0" # Range -- latest within bounds
-      alias: "analytics-db"
-```
-
-### Semver Compatibility Rules
-
-Versioning follows **strict semver**. Minor and patch versions are guaranteed backwards-compatible. Breaking changes require a major version bump.
-
-| Change                                     | Minor/Patch OK? | Major Required? |
-| ------------------------------------------ | --------------- | --------------- |
-| Add new `userVariable` **with** default    | Yes             | No              |
-| Add new `userVariable` **without** default | No              | Yes             |
-| Remove a `userVariable`                    | No              | Yes             |
-| Rename a `userVariable`                    | No              | Yes             |
-| Change variable `type`                     | No              | Yes             |
-| Change variable `default` value            | Yes             | No              |
-| Add new `options` to a dropdown            | Yes             | No              |
-| Remove `options` from a dropdown           | No              | Yes             |
-| Add new `output`                           | Yes             | No              |
-| Remove an `output`                         | No              | Yes             |
-| Rename an `output`                         | No              | Yes             |
-| Add new `injectedVariable`                 | Yes             | No              |
-| Remove an `injectedVariable`               | No              | Yes             |
-| Change `description`, `icon`, `tags`       | Yes             | No              |
-| Change `engine` or `provider`              | No              | Yes             |
-
-**Why this matters:** When a user upgrades from v1.0.0 to v1.3.0, they can trust that:
-
-- All their existing variables still work
-- All their existing env vars (from outputs) still exist
-- New variables have defaults, so no manual input is needed for auto-upgrades
-- No surprises -- the upgrade is additive only
-
-### Upgrade Flow
-
-When a new version of a blueprint is released, users with services provisioned from that blueprint are notified.
-
-**How it works:**
-
-1. q-core tracks which blueprint and version each service was created from (`catalog_blueprint_name` + `catalog_blueprint_version` on the Terraform Service).
-2. When the service is fetched, q-core checks the version index and returns `upgrade_available: true` + `latest_version` if a newer version exists.
-3. The Console shows an "Update available" badge on the service.
-4. User clicks "Review Update" and sees a structured diff:
-   - New variables added (with defaults pre-filled)
-   - Changed defaults
-   - New options added to dropdowns
-   - New outputs that will produce new env vars
-5. User confirms, q-core updates the commit SHA to the new tag and triggers a redeploy.
-
-**Upgrade diff example (v1.0.0 -> v1.2.0):**
-
-```
-+ NEW variable: disk_type (string, default: "gp3")
-+ NEW variable: monitoring_interval (number, default: 60)
-+ NEW output: QSM_POSTGRESQL_MONITORING_ARN
-~ CHANGED default: disk_size 20 -> 50
-~ CHANGED options: instance_class added "db.r7g.large"
-```
-
-### Upgrade Policies
-
-Each provisioned service has a configurable upgrade policy:
-
-| Policy             | Behavior                                                        | Use Case                                             |
-| ------------------ | --------------------------------------------------------------- | ---------------------------------------------------- |
-| `manual` (default) | Notification only. User must review and confirm.                | Production databases, critical infrastructure.       |
-| `auto_patch`       | Auto-applies `x.y.Z` bumps (1.0.0 -> 1.0.3). Skips minor/major. | Services where bug fixes should be immediate.        |
-| `auto_minor`       | Auto-applies `x.Y.z` bumps (1.0.0 -> 1.3.0). Skips major.       | Services that should get new features automatically. |
-
-**All policies skip major version bumps** -- those always require manual review because they may contain breaking changes.
-
-**Auto-upgrade preconditions:**
-
-- All new variables must have defaults (guaranteed by semver rules for minor/patch)
-- No removed variables or outputs (guaranteed by semver rules)
-- Service must be in a healthy state (last deploy succeeded)
-- q-core runs a periodic check (every 15 min) for services with non-manual policies
-
-### Release Workflow
-
-To release a new version of a blueprint:
-
-1. Update the blueprint files (Terraform, `qsm.yml`, etc.)
-2. Bump `metadata.version` in `qsm.yml` to the new version
-3. Open a PR to `main` -- CI validates schema, variables, outputs, and runs `terraform validate`
-4. Merge the PR
-5. Create a git tag matching the new version:
-
-```bash
-# Tag the current main HEAD
-git tag aws-postgresql/1.2.0
-git push origin aws-postgresql/1.2.0
-```
-
-1. Release CI (`release.yml`) validates:
-   - Tag version matches `metadata.version` in `qsm.yml`
-   - Minor/patch versions are backwards-compatible with the previous version (no removed vars/outputs, new required vars have defaults)
-   - Major version bumps skip the compatibility check
-2. GitHub webhook notifies q-core, which invalidates cache and rebuilds the version index
-
-### Out of scope
-
-Notification system for available service update
-
----
-
-## Helm Blueprints
-
-Blueprints can use Helm as the engine instead of Terraform. The user experience is identical (browse catalog, fill variables, get env vars), but the underlying provisioning uses `helm install` instead of `terraform apply`.
-
-### Helm QSM Structure
-
-```yaml
-apiVersion: "qovery.com/v1"
-kind: "ServiceBlueprint"
-metadata:
-  name: "k8s-prometheus"
-  version: "1.0.0"
-  description: "Prometheus monitoring stack"
-spec:
-  provider: "aws"
-  category: "monitoring"
-  engine: "helm"
-
-  helm:
-    chart:
-      repository: "https://prometheus-community.github.io/helm-charts"
-      name: "kube-prometheus-stack"
-      version: "58.2.1"
-    namespace: "monitoring"
-    timeout: 600
-
-  userVariables:
-    - name: "retention_days"
-      type: "number"
-      default: "15"
-      description: "Data retention in days"
-      required: false
-      uiHint: "text"
-      valuePath: "prometheus.prometheusSpec.retention"
-
-  outputs:
-    - name: "QSM_PROMETHEUS_URL"
-      description: "Prometheus server URL"
-      sensitive: false
-      source: "service:monitoring/prometheus-server:9090"
-```
-
-Key differences from Terraform blueprints:
-
-- `spec.helm` section is required (chart repo, name, version)
-- Variables use `valuePath` to map into Helm's nested `values.yaml` (e.g., `prometheus.prometheusSpec.retention`)
-- Outputs specify a `source` for value extraction: `configmap:{ns}/{name}:{key}` or `service:{ns}/{name}:{port}`
-
----
-
-## EnvBlueprints (Multi-Service Composition)
-
-Users can compose multiple catalog services into a single deployable stack by authoring a `StackBlueprint` in their own Git repos.
-
-```yaml
-apiVersion: "qovery.com/v1"
-kind: "StackBlueprint"
-metadata:
-  name: "production-stack"
-  version: "1.0.0"
-  description: "Production environment with database, cache, and monitoring"
-spec:
-  services:
-    - blueprint: "aws-postgresql"
-      version: "1.2.0" # Exact version pin
-      alias: "main-db"
-      variables:
-        instance_class: "db.r6g.large"
-        multi_az: "true"
-
-    - blueprint: "aws-redis"
-      version: "1.x" # Version train
-      alias: "cache"
-      variables:
-        node_type: "cache.r6g.large"
-
-    - blueprint: "aws-postgresql"
-      version: ">=1.1.0 <2.0.0" # Version range
-      alias: "analytics-db"
-      variables:
-        instance_class: "db.t3.medium"
-      dependsOn: ["main-db"] # Wait for main-db first
-```
-
-- `alias` becomes the service name in Qovery (must be unique within the stack)
-- `variables` pre-fill values; remaining required variables are prompted at provisioning time
-- `dependsOn` controls ordering; services without it deploy in parallel
-- The same blueprint can appear multiple times with different aliases
-- EnvBlueprints live in user repos, not in this catalog repo
-
----
-
-## Alias Variable Mechanism
-
-Catalog services use an automatic alias bridge to expose outputs as environment variables to other services in the same environment.
-
-### How it works
-
-1. Every output in a blueprint **must** be prefixed with `QSM_` (Qovery Service Manifest), e.g. `QSM_POSTGRESQL_HOST`.
-2. The user is asked to enter alias (if they want for every QSM\_ found)
-3. After apply/install, q-core reads the outputs and creates the aliases
-
-4. These environment variables are created at **environment scope**, so every other service in the environment can read them.
-
-### Example
-
-A user provisions the `aws-postgresql` blueprint and names the service `my-database`.
-
-| Output                             | Environment variable                       |
-| ---------------------------------- | ------------------------------------------ |
-| `QSM_POSTGRESQL_HOST`              | `MY_DATABASE_POSTGRESQL_HOST`              |
-| `QSM_POSTGRESQL_PORT`              | `MY_DATABASE_POSTGRESQL_PORT`              |
-| `QSM_POSTGRESQL_DATABASE`          | `MY_DATABASE_POSTGRESQL_DATABASE`          |
-| `QSM_POSTGRESQL_USERNAME`          | `MY_DATABASE_POSTGRESQL_USERNAME`          |
-| `QSM_POSTGRESQL_CONNECTION_STRING` | `MY_DATABASE_POSTGRESQL_CONNECTION_STRING` |
-
-The service name is normalized: lowercased with hyphens/spaces replaced by underscores, then uppercased (`my-database` -> `MY_DATABASE`).
-**We must check that the alias doens't exist yet**
-
-### Rules for blueprint authors
-
-- All output names **must** start with `QSM_` (enforced by CI and JSON Schema).
-- The part after `QSM_` should identify the service type (`POSTGRESQL_`, `MYSQL_`, `REDIS_`, `MONGODB_`).
-- Aliases are **user-editable**.
-- Sensitive outputs should be marked with `sensitive: true` in `qsm.yml` and will be stored as secrets.
+- **Minor/patch**: additive only (new variables with defaults, new outputs, changed defaults)
+- **Major**: breaking changes (removed/renamed variables or outputs, provider change)
+- Metadata-only changes (icon, description, categories) update instantly -- no plan/apply needed
 
 ---
 
 ## Contributing
 
-### Adding or Updating a Blueprint
+### Adding a Blueprint
 
-1. Create or modify a blueprint in the appropriate `{provider}/{service}/` directory
-2. Ensure `qsm.yml` is valid against the JSON Schema
-3. All variables referenced in `qsm.yml` must exist in `variables.tf`
-4. All outputs referenced in `qsm.yml` must exist in `outputs.tf` and start with `QSM_`
-5. Run `terraform init -backend=false && terraform validate` locally
-6. Open a PR -- CI validates everything automatically
+1. Create a directory under `v2/examples/{name}/`
+2. Write `main.tf`, `variables.tf`, `outputs.tf`, `providers.tf`, `qsm.yml`
+3. Open a PR -- CI validates
 
-### Releasing a New Version
-
-1. Update the blueprint and bump `metadata.version` in `qsm.yml`
-2. Merge the PR to `main`
-3. Tag and push:
+### Releasing
 
 ```bash
-git tag aws-postgresql/1.2.0
-git push origin aws-postgresql/1.2.0
+git tag aws-s3/1.0.0
+git push origin aws-s3/1.0.0
 ```
-
-1. Release CI validates the tag, checks backwards compatibility for minor/patch bumps
-
-### Version Bump Guidelines
-
-- **Patch** (1.0.0 -> 1.0.1): Bug fixes, documentation updates, no variable/output changes
-- **Minor** (1.0.0 -> 1.1.0): New variables (with defaults), new outputs, new options added to dropdowns
-- **Major** (1.0.0 -> 2.0.0): Removed/renamed variables or outputs, changed variable types, removed dropdown options

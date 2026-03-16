@@ -1,34 +1,32 @@
 # -----------------------------------------------------------------------------
 # PostgreSQL RDS - Variables
-# Converted from Qovery engine Jinja2 templates to raw Terraform
 #
-# Variables that can be auto-populated from Qovery built-in env vars are marked
-# with the corresponding TF_VAR_ mapping in their description.
-# Set them in Qovery as:  TF_VAR_<name> = {{QOVERY_..._BUILT_IN}}
+# qoveryVariables (auto-filled by q-core based on qsm.yml) are in the first
+# section. User variables are below.
 # -----------------------------------------------------------------------------
 
 # =============================================================================
-# Qovery Context (auto-populated from built-in env vars)
+# Qovery Variables (auto-filled from cluster/environment context)
 # =============================================================================
 
 variable "qovery_cluster_name" {
-  description = "EKS cluster name. Maps to Qovery built-in: QOVERY_KUBERNETES_CLUSTER_NAME"
+  description = "EKS cluster name"
   type        = string
 }
 
 variable "region" {
-  description = "AWS region. Maps to Qovery built-in: QOVERY_CLOUD_PROVIDER_REGION"
+  description = "AWS region (overridable)"
   type        = string
 }
 
 variable "qovery_environment_id" {
-  description = "Qovery environment ID. Maps to Qovery built-in: QOVERY_ENVIRONMENT_ID"
+  description = "Qovery environment ID"
   type        = string
   default     = ""
 }
 
 variable "qovery_project_id" {
-  description = "Qovery project ID. Maps to Qovery built-in: QOVERY_PROJECT_ID"
+  description = "Qovery project ID"
   type        = string
   default     = ""
 }

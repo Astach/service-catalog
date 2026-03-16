@@ -1,9 +1,8 @@
 # -----------------------------------------------------------------------------
 # PostgreSQL RDS - Provider Configuration
 #
-# AWS credentials are expected via environment variables:
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
-# In Qovery, set these as secrets on the Terraform service.
+# AWS credentials are injected by the engine based on spec.provider: "aws"
+# in qsm.yml. No manual credential setup needed.
 # -----------------------------------------------------------------------------
 
 terraform {

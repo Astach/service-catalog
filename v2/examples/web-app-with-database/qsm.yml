@@ -1,0 +1,51 @@
+apiVersion: "qovery.com/v2"
+kind: StackBlueprint
+
+metadata:
+  name: "web-app-with-database"
+  version: "1.0.0"
+  description: "Production-ready stack: PostgreSQL database + Redis cache + web application"
+  icon: "https://cdn.qovery.com/icons/stack.svg"
+  categories:
+    - "stack"
+    - "database"
+    - "cache"
+    - "application"
+
+spec:
+  # Ordered list of deployment stages.
+  # Services in the same stage are planned/applied in parallel.
+  # Each stage waits for the previous one to complete.
+  stages:
+    - name: "databases"
+      description: "Provision databases and caches first"
+      services:
+        - blueprint: "aws-postgresql"
+          version: ">=1.0.0 <2.0.0"
+          alias: "main-db"
+          variables:
+            postgresql_identifier: "main-db"
+            instance_class: "db.t3.small"
+            multi_az: "true"
+            disk_size: "50"
+            database_name: "production"
+
+        - blueprint: "aws-redis"
+          version: "1.x"
+          alias: "cache"
+          variables:
+            node_type: "cache.t3.micro"
+            num_cache_clusters: "2"
+
+    - name: "applications"
+      description: "Deploy application after databases are ready"
+      services:
+        - blueprint: "container-app"
+          version: "1.0.0"
+          alias: "api"
+          variables:
+            app_name: "api-server"
+            image_name: "my-org/api"
+            image_tag: "latest"
+            app_port: "8080"
+            publicly_accessible: "true"
