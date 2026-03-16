@@ -15,7 +15,7 @@ Detailed breakdown of what changes in each codebase, and what stays the same.
 
 ## 1. What Stays the Same
 
-### Engine (Rust) -- No MVP Changes
+### Engine   -- No MVP Changes
 
 The engine is **completely untouched** for the Terraform catalog MVP. It already:
 

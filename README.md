@@ -88,6 +88,27 @@ User selects "aws-postgresql v1.2.0"
 | **Train** | `"1.x"`            | Resolves to the latest `1.*.*` release. Auto-follows minor/patch within major. |
 | **Range** | `">=1.1.0 <2.0.0"` | Resolves to the latest version matching the constraint.                        |
 
+```mermaid
+flowchart TD
+    A["User or StackBlueprint<br/>requests a blueprint version"] --> B{"Version format?"}
+
+    B -->|"Exact: '1.2.0'"| C["Resolve tag<br/>aws-postgresql/1.2.0<br/>→ commit SHA"]
+
+    B -->|"Train: '1.x'"| D["List all tags for<br/>aws-postgresql/*"]
+    D --> E["Filter: major == 1"]
+    E --> F["Sort semver descending"]
+    F --> G["Pick latest: e.g. 1.3.2"]
+    G --> C
+
+    B -->|"Range: '>=1.1.0 <2.0.0'"| H["List all tags for<br/>aws-postgresql/*"]
+    H --> I["Filter by constraint"]
+    I --> J["Sort semver descending"]
+    J --> K["Pick latest match"]
+    K --> C
+
+    C --> L["Pin commit SHA<br/>for deterministic deploys"]
+```
+
 Example StackBlueprint with version pinning:
 
 ```yaml
@@ -157,6 +178,52 @@ When a new version of a blueprint is released, users with services provisioned f
    - New outputs that will produce new env vars
 5. User confirms, q-core updates the commit SHA to the new tag and triggers a redeploy.
 
+```mermaid
+sequenceDiagram
+    actor User
+    participant Console
+    participant qcore as q-core
+    participant VersionIdx as Version Index
+    participant GitHub as GitHub API
+    participant Engine
+    participant Cloud as Cloud Provider
+
+    User ->> Console: View catalog-provisioned service page
+
+    Console ->> qcore: GET /terraform-services/{id}
+    qcore ->> VersionIdx: Compare catalog_blueprint_version<br/>against version index
+    VersionIdx -->> qcore: latest_version = "1.3.0"<br/>(current = "1.0.0")
+    qcore -->> Console: {service..., upgrade_available: true,<br/>latest_version: "1.3.0"}
+
+    Console -->> User: Show "Update available" badge
+
+    User ->> Console: Click "Review Update"
+    Console ->> qcore: GET /catalog/blueprints/aws-postgresql<br/>?version=1.3.0
+
+    qcore ->> GitHub: Fetch qsm.yml @ aws-postgresql/1.0.0<br/>+ qsm.yml @ aws-postgresql/1.3.0
+    GitHub -->> qcore: Both QSM versions
+
+    Note over qcore: Compute structured diff:<br/>+ NEW variable: disk_type (default: "gp3")<br/>+ NEW output: QSM_POSTGRESQL_MONITORING_ARN<br/>~ CHANGED default: disk_size 20 → 50
+
+    qcore -->> Console: Diff payload
+    Console -->> User: Show diff with pre-filled defaults
+
+    User ->> Console: Click "Save & Redeploy"
+    Console ->> qcore: PUT /terraform-services/{id}/upgrade<br/>{target_version: "1.3.0", vars: {...}}
+
+    Note over qcore: Update commit SHA to new tag<br/>Merge variables (user overrides + new defaults)
+
+    qcore ->> Engine: Trigger redeploy
+    Engine ->> Cloud: terraform apply (new version)
+    Cloud -->> Engine: Done
+    Engine ->> qcore: gRPC: sendTerraformResources
+
+    Note over qcore: AliasBridgeService processes<br/>any new QSM_* outputs<br/>→ creates additional env vars
+
+    qcore -->> Console: Deployment complete
+    Console -->> User: Service upgraded to v1.3.0
+```
+
 **Upgrade diff example (v1.0.0 -> v1.2.0):**
 
 ```
@@ -202,11 +269,32 @@ git tag aws-postgresql/1.2.0
 git push origin aws-postgresql/1.2.0
 ```
 
-1. Release CI (`release.yml`) validates:
+6. Release CI (`release.yml`) validates:
    - Tag version matches `metadata.version` in `qsm.yml`
    - Minor/patch versions are backwards-compatible with the previous version (no removed vars/outputs, new required vars have defaults)
    - Major version bumps skip the compatibility check
-2. GitHub webhook notifies q-core, which invalidates cache and rebuilds the version index
+7. GitHub webhook notifies q-core, which invalidates cache and rebuilds the version index
+
+```mermaid
+flowchart TD
+    A["Update blueprint files<br/>+ bump metadata.version"] --> B["Open PR to main"]
+    B --> C{"PR CI (validate.yml)"}
+
+    C -->|Pass| D["Merge PR to main"]
+    C -->|Fail| E["Fix & re-push"]
+    E --> C
+
+    D --> F["git tag aws-postgresql/1.2.0<br/>git push origin aws-postgresql/1.2.0"]
+
+    F --> G{"Release CI (release.yml)"}
+
+    G -->|Pass| H["GitHub webhook fires"]
+    G -->|Fail| I["Delete tag, fix, re-tag"]
+    I --> F
+
+    H --> J["q-core invalidates cache<br/>+ rebuilds version index"]
+    J --> K["New version live in catalog"]
+```
 
 ### Out of scope
 
@@ -317,6 +405,20 @@ Catalog services use an automatic alias bridge to expose outputs as environment 
 3. After apply/install, q-core reads the outputs and creates the aliases
 
 4. These environment variables are created at **environment scope**, so every other service in the environment can read them.
+
+```mermaid
+flowchart LR
+    TFOutputs["Terraform Outputs<br/>(after apply)"] --> Scan{"Scan for<br/>QSM_* prefix"}
+
+    Scan -->|"QSM_POSTGRESQL_HOST"| Strip["Strip QSM_ prefix<br/>→ POSTGRESQL_HOST"]
+    Scan -->|"QSM_POSTGRESQL_PORT"| Strip
+    Scan -->|"non-QSM output"| Skip["Ignored"]
+
+    Strip --> Normalize["Normalize service name<br/>'my-database'<br/>→ MY_DATABASE"]
+    Normalize --> Combine["Combine:<br/>MY_DATABASE_POSTGRESQL_HOST<br/>MY_DATABASE_POSTGRESQL_PORT"]
+    Combine --> EnvVar["Create EnvironmentVariable<br/>records (environment-scoped)"]
+    EnvVar --> Available["Available to all services<br/>in the environment"]
+```
 
 ### Example
 

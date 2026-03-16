@@ -12,7 +12,7 @@
 
 ### Actors
 
-- **Console (React)**: The UI the user interacts with.
+- **Console**: The UI the user interacts with.
 - **q-core**: Backend API that fetches and caches blueprint data.
 - **GitHub API**: Source of truth for the `service-catalog` repository.
 
@@ -282,20 +282,18 @@
 
 After provisioning `aws-postgresql` with service name `my-database`:
 
-| Variable Name | Type | Scope | Value |
-|---|---|---|---|
-| `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_HOST` | BUILT_IN | ENVIRONMENT | `rds-abc.rds.amazonaws.com` |
-| `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_PORT` | BUILT_IN | ENVIRONMENT | `5432` |
-| `QSM_POSTGRESQL_HOST` | ALIAS | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_HOST` |
-| `QSM_POSTGRESQL_PORT` | ALIAS | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_PORT` |
-| `MY_DATABASE_POSTGRESQL_HOST` | ALIAS | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_HOST` |
-| `MY_DATABASE_POSTGRESQL_PORT` | ALIAS | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_PORT` |
+| Variable Name                                      | Type     | Scope       | Value                                                 |
+| -------------------------------------------------- | -------- | ----------- | ----------------------------------------------------- |
+| `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_HOST` | BUILT_IN | ENVIRONMENT | `rds-abc.rds.amazonaws.com`                           |
+| `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_PORT` | BUILT_IN | ENVIRONMENT | `5432`                                                |
+| `QSM_POSTGRESQL_HOST`                              | ALIAS    | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_HOST` |
+| `QSM_POSTGRESQL_PORT`                              | ALIAS    | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_PORT` |
+| `MY_DATABASE_POSTGRESQL_HOST`                      | ALIAS    | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_HOST` |
+| `MY_DATABASE_POSTGRESQL_PORT`                      | ALIAS    | ENVIRONMENT | -> `QOVERY_OUTPUT_TERRAFORM_ZABC_QSM_POSTGRESQL_PORT` |
 
 Any service in the same environment can reference `MY_DATABASE_POSTGRESQL_HOST` to get the database hostname.
 
 ### Variable Resolution Order
-
-When provisioning, variables are merged with this priority (highest wins):
 
 ```
 1. Injected variables        (from cluster/environment context, always applied, never overridden)
@@ -311,13 +309,12 @@ When provisioning, variables are merged with this priority (highest wins):
 
 ### How It Differs from Terraform
 
-| Aspect | Terraform Blueprint | Helm Blueprint |
-|---|---|---|
-| Engine | `terraform apply` | `helm upgrade --install` |
-| Source | Git repo + root module path | Helm chart repository + chart name + version |
-| Variables | Terraform `variables.tf` inputs | Helm `--set` values via `valuePath` mapping |
-| Outputs | `terraform output -json` -> automatic | Engine reads K8s resources post-install -> manual source mapping |
-| Backend | Kubernetes secrets (Terraform state) | Helm release (Tiller-less, stored in K8s secrets) |
+| Aspect    | Terraform Blueprint                   | Helm Blueprint                                                   |
+| --------- | ------------------------------------- | ---------------------------------------------------------------- |
+| Engine    | `terraform apply`                     | `helm upgrade --install`                                         |
+| Source    | Git repo + root module path           | Helm chart repository + chart name + version                     |
+| Variables | Terraform `variables.tf` inputs       | Helm `--set` values via `valuePath` mapping                      |
+| Outputs   | `terraform output -json` -> automatic | Engine reads K8s resources post-install -> manual source mapping |
 
 ### Sequence Diagram
 
@@ -416,11 +413,11 @@ When provisioning, variables are merged with this priority (highest wins):
 
 The `outputs[].source` field in `qsm.yml` tells the engine where to read the value from Kubernetes after `helm install`:
 
-| Source Format | Example | Engine Action |
-|---|---|---|
-| `configmap:{namespace}/{name}:{key}` | `configmap:monitoring/prometheus-config:url` | `kubectl get cm {name} -n {namespace} -o jsonpath='{.data.{key}}'` |
-| `service:{namespace}/{name}:{port}` | `service:monitoring/prometheus-server:9090` | `kubectl get svc {name} -n {namespace}` -> extract ClusterIP + port |
-| `secret:{namespace}/{name}:{key}` | `secret:monitoring/grafana-admin:password` | `kubectl get secret {name} -n {namespace} -o jsonpath='{.data.{key}}'` (base64 decoded) |
+| Source Format                        | Example                                      | Engine Action                                                                           |
+| ------------------------------------ | -------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `configmap:{namespace}/{name}:{key}` | `configmap:monitoring/prometheus-config:url` | `kubectl get cm {name} -n {namespace} -o jsonpath='{.data.{key}}'`                      |
+| `service:{namespace}/{name}:{port}`  | `service:monitoring/prometheus-server:9090`  | `kubectl get svc {name} -n {namespace}` -> extract ClusterIP + port                     |
+| `secret:{namespace}/{name}:{key}`    | `secret:monitoring/grafana-admin:password`   | `kubectl get secret {name} -n {namespace} -o jsonpath='{.data.{key}}'` (base64 decoded) |
 
 ### Helm Variable Mapping
 
@@ -433,7 +430,8 @@ userVariables:
     type: "number"
     default: "15"
     description: "Data retention in days"
-    valuePath: "prometheus.prometheusSpec.retention"  # <-- maps into values.yaml
+    valuePath: "prometheus.prometheusSpec.retention" # <-- maps into values.yaml
+
 
 # At deploy time, this becomes:
 # helm upgrade --set prometheus.prometheusSpec.retention=15

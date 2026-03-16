@@ -149,152 +149,123 @@ created with this definition can be bumped as well.
 
 ### 4.1 High-Level Architecture
 
-```
-+-------------+     +--------------------------------------------------------------+
-|             |     |                       q-core                                  |
-|  Console    |---->|  +--------------+   +-------------------+                    |
-|  (React)    | REST|  | CatalogApi   |-->| CreateTerraform   |                    |
-|             |     |  | Controller   |   | FromCatalogUseCase|                    |
-+-------------+     |  +--------------+   +--------+----------+                    |
-                    |         |                     |                               |
-                    |         v                     v                               |
-                    |  +--------------+   +-------------------+   +--------------+ |
-                    |  | Blueprint    |   | TerraformDomain   |   | AliasBridge  | |
-                    |  | Registry     |   | .create()         |   | Service      | |
-                    |  | Service      |   | (existing)        |   | (new)        | |
-                    |  +------+-------+   +--------+----------+   +------+-------+ |
-                    |         |                     |                     |         |
-                    |  +------+-------+             |              +------+-------+ |
-                    |  | In-Memory    |             v              | Environment  | |
-                    |  | Cache        |      +-----------+        | Variable     | |
-                    |  | (blueprints  |      | terraform |        | (existing)   | |
-                    |  |  + versions) |      | (DB table)|        +--------------+ |
-                    |  +--------------+      +-----------+                         |
-                    +------------------------+---+---+-------------------------+
-                              |              |       |                          |
-                    +---------v---------+    |  +----v-----------+   +---------v--------+
-                    |  GitHub API       |    |  |  Redis Streams |   |  Version Index   |
-                    |  (read qsm.yml,  |    |  |  (EngineReq)   |   |  (git tags ->    |
-                    |   list dirs,      |    |  +----+-----------+   |   semver list)   |
-                    |   list tags)      |    |       |               +------------------+
-                    +---------+---------+    |  +----v----------+
-                              |             |  |     Engine     |
-                    +---------v---------+   |  |     (Rust)     |
-                    |  Blueprint Repo   |   |  | git shallow    |
-                    |  (GitHub)         |<--+  | fetch @tag_SHA |
-                    |  service-catalog  |      | tf apply /     |
-                    +-------------------+      | helm install   |
-                                               +------+--------+
-                                                      |
-                                               +------v----------+
-                                               | Cloud Provider  |
-                                               | (AWS/GCP/Azure/ |
-                                               |  Scaleway)      |
-                                               +-----------------+
+```mermaid
+graph TB
+    Console["Console<br/> "]
+
+    subgraph qcore["q-core"]
+        CatalogApi["CatalogApi<br/>Controller"]
+        CreateUseCase["CreateTerraform<br/>FromCatalogUseCase"]
+        BlueprintRegistry["Blueprint<br/>RegistryService"]
+        TerraformDomain["TerraformDomain<br/>.create()"]
+        AliasBridge["AliasBridge<br/>Service"]
+        Cache["In-Memory Cache<br/>(blueprints + versions)"]
+        VersionIndex["Version Index<br/>(git tags → semver list)"]
+        EnvVar["Environment<br/>Variable"]
+        TFTable[("terraform<br/>(DB table)")]
+    end
+
+    GitHubAPI["GitHub REST API<br/>(read qsm.yml,<br/>list dirs, list tags)"]
+    BlueprintRepo["Blueprint Repo<br/>(GitHub)<br/>service-catalog"]
+    Redis["Redis Streams<br/>(EngineReq)"]
+    Engine["Engine  <br/>git shallow fetch @tag_SHA<br/>tf apply / helm install"]
+    Cloud["Cloud Provider<br/>(AWS / GCP / Azure /<br/>Scaleway)"]
+
+    Console -->|REST| CatalogApi
+    CatalogApi --> CreateUseCase
+    CatalogApi --> BlueprintRegistry
+    BlueprintRegistry --> Cache
+    Cache --> VersionIndex
+    BlueprintRegistry --> GitHubAPI
+    GitHubAPI --> BlueprintRepo
+    CreateUseCase --> TerraformDomain
+    TerraformDomain --> TFTable
+    TerraformDomain --> Redis
+    Redis --> Engine
+    Engine -->|"git shallow fetch @tag_SHA"| BlueprintRepo
+    Engine -->|"tf apply / helm install"| Cloud
+    Engine -->|"gRPC: sendTerraformResources"| AliasBridge
+    AliasBridge --> EnvVar
 ```
 
 ### 4.2 Provisioning Workflow (Sequence)
 
-```
- Console          q-core                     In-Memory     Engine          Cloud
-   |                |                         Cache           |               |
-   | POST /catalog  |                           |             |               |
-   | Service        |                           |             |               |
-   | {blueprint,    |                           |             |               |
-   |  version,      |                           |             |               |
-   |  name, vars}   |                           |             |               |
-   |--------------->|                           |             |               |
-   |                |                           |             |               |
-   |                |  Lookup blueprint@version  |             |               |
-   |                |-------------------------->|             |               |
-   |                |                           |             |               |
-   |                |  [cache hit: return]       |             |               |
-   |                |  [cache miss: fetch        |             |               |
-   |                |   qsm.yml from GitHub API  |             |               |
-   |                |   @tag ref, populate cache]|             |               |
-   |                |<--------------------------|             |               |
-   |                |                           |             |               |
-   |                |-- Validate user vars                    |               |
-   |                |-- Resolve injected vars                 |               |
-   |                |   from cluster context                  |               |
-   |                |-- Merge all variables                   |               |
-   |                |                                         |               |
-   |                |-- TerraformDomain.create()              |               |
-   |                |   {git_url, commit_sha (from tag),      |               |
-   |                |    root_module_path, vars,               |               |
-   |                |    catalog_blueprint_name,               |               |
-   |                |    catalog_blueprint_version}            |               |
-   |                |                                         |               |
-   |                |-- Trigger deploy (existing flow)        |               |
-   |                |-----------------------------> Redis --->|               |
-   |                |                                         |               |
-   |  <-- 202 Accepted (terraform service ID) --|             |               |
-   |<---------------|                                         |               |
-   |                |                                         |               |
-   |                |                                         | git init +    |
-   |                |                                         | shallow fetch |
-   |                |                                         | @tag_sha      |
-   |                |                                         |               |
-   |                |                                         | terraform     |
-   |                |                                         | init + apply  |
-   |                |                                         |-------------->|
-   |                |                                         |<--------------|
-   |                |                                         |               |
-   |                |                                         | terraform     |
-   |                |                                         | show -json    |
-   |                |                                         | (extract      |
-   |                |                                         |  outputs)     |
-   |                |                                         |               |
-   |                |  gRPC: sendTerraformResources           |               |
-   |                |<----------------------------------------|               |
-   |                |                                         |               |
-   |                |-- AliasBridgeService:                   |               |
-   |                |   1. Scan outputs for QSM_* prefix      |               |
-   |                |      (no isFromCatalog check)           |               |
-   |                |   2. Normalize service name             |               |
-   |                |      "my-database" -> "MY_DATABASE"     |               |
-   |                |   3. Strip QSM_ prefix                  |               |
-   |                |      "QSM_POSTGRESQL_HOST"              |               |
-   |                |      -> "POSTGRESQL_HOST"               |               |
-   |                |   4. Combine:                           |               |
-   |                |      "MY_DATABASE_POSTGRESQL_HOST"      |               |
-   |                |   5. Create EnvironmentVariable         |               |
-   |                |      records (existing system)          |               |
-   |                |                                         |               |
-   |  <-- WebSocket: deployment complete ----|               |               |
-   |<---------------|                                         |               |
+```mermaid
+sequenceDiagram
+    actor User
+    participant Console
+    participant qcore as q-core
+    participant Cache as In-Memory Cache
+    participant GitHub as GitHub API
+    participant Redis as Redis Streams
+    participant Engine
+    participant Cloud as Cloud Provider
+
+    User ->> Console: Click "Provision" on blueprint card
+    Console ->> qcore: POST /catalog/services<br/>{blueprint, version, name, vars}
+
+    qcore ->> Cache: Lookup blueprint@version
+    alt Cache hit
+        Cache -->> qcore: Return cached QSM
+    else Cache miss
+        Cache ->> GitHub: GET /repos/.../contents/{path}/qsm.yml<br/>?ref={blueprint}/{version}
+        GitHub -->> Cache: qsm.yml content
+        Cache -->> qcore: Return QSM + populate cache
+    end
+
+    Note over qcore: Validate user vars against QSM
+    Note over qcore: Resolve injected vars from cluster context
+    Note over qcore: Merge all variables
+
+    qcore ->> qcore: TerraformDomain.create()<br/>{git_url, commit_sha (from tag),<br/>root_module_path, vars,<br/>catalog_blueprint_name,<br/>catalog_blueprint_version}
+
+    qcore ->> Redis: Trigger deploy (existing flow)
+    qcore -->> Console: 202 Accepted (terraform service ID)
+    Console -->> User: Show "Deploying..." status
+
+    Redis ->> Engine: Engine request
+    Engine ->> Engine: git init + shallow fetch @tag_sha
+    Engine ->> Cloud: terraform init + apply
+    Cloud -->> Engine: Resources created
+    Engine ->> Engine: terraform show -json (extract outputs)
+
+    Engine ->> qcore: gRPC: sendTerraformResources
+
+    Note over qcore: AliasBridgeService:<br/>1. Scan outputs for QSM_* prefix<br/>2. Normalize service name → "MY_DATABASE"<br/>3. Strip QSM_ prefix<br/>4. Combine: MY_DATABASE_POSTGRESQL_HOST<br/>5. Create EnvironmentVariable records
+
+    qcore -->> Console: WebSocket: deployment complete
+    Console -->> User: Show success + alias env vars
 ```
 
 ### 4.3 Blueprint Cache & Webhook Flow
 
-```
- Blueprint Repo       GitHub           q-core
- (developer push)       |                |
-       |                |                |
-       |  git push      |                |
-       |  to main       |                |
-       |--------------->|                |
-       |                |                |
-       |  git tag       |                |
-       |  aws-pg/1.2.0  |                |
-       |--------------->|                |
-       |                |                |
-       |                |  POST /internal/catalog/webhook
-       |                |  {ref: "refs/heads/main"} or
-       |                |  {ref: "refs/tags/aws-postgresql/1.2.0"}
-       |                |--------------->|
-       |                |                |
-       |                |                |  Clear in-memory cache
-       |                |                |  (all blueprints + version index)
-       |                |                |
-       |                |                |  Next API request:
-       |                |                |  1. Cache miss
-       |                |                |  2. List tags for version index
-       |                |                |  3. List dirs from main
-       |                |                |  4. GET qsm.yml for each
-       |                |                |     blueprint at requested ref
-       |                |                |  5. Populate cache
-       |                |                |  6. Return response
+```mermaid
+sequenceDiagram
+    actor Dev as Blueprint Developer
+    participant Repo as Blueprint Repo
+    participant GitHub
+    participant qcore as q-core
+    participant Cache as In-Memory Cache
+
+    Dev ->> Repo: git push to main
+    Dev ->> Repo: git tag aws-postgresql/1.2.0
+    Dev ->> GitHub: git push origin aws-postgresql/1.2.0
+
+    GitHub ->> qcore: POST /internal/catalog/webhook<br/>{ref: "refs/tags/aws-postgresql/1.2.0"}
+
+    qcore ->> Cache: Clear all blueprints + version index
+
+    Note over qcore,Cache: Cache is now empty.<br/>Next API request triggers rebuild.
+
+    par On next catalog request
+        qcore ->> GitHub: GET /repos/.../git/refs/tags/<br/>(rebuild version index)
+        GitHub -->> qcore: All tag refs
+        qcore ->> GitHub: GET /repos/.../contents/{provider}?ref=main<br/>(list blueprint dirs)
+        GitHub -->> qcore: Directory listing
+        qcore ->> GitHub: GET /repos/.../contents/{path}/qsm.yml?ref={tag}<br/>(for each blueprint at requested version)
+        GitHub -->> qcore: qsm.yml content
+        qcore ->> Cache: Populate cache
+    end
 ```
 
 ## 5. Versioning Mechanism
