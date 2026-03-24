@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -65,11 +65,31 @@ async fn execute_plan(
     req: PlanRequest,
     tx: mpsc::Sender<Result<PlanEvent, Status>>,
 ) -> Result<()> {
+    let source = req.source.as_ref().context("missing blueprint source")?;
     let backend = req.backend.as_ref().context("missing backend config")?;
-    let work_dir = prepare_workspace(&req.files, backend, &req.variables)?;
+
+    // 1. Clone blueprint from git
+    info!(
+        repo = %source.repo_url,
+        git_ref = %source.git_ref,
+        path = %source.path,
+        "fetching blueprint from git"
+    );
+    stream_log(
+        &tx,
+        LogStream::Stdout,
+        format!("Cloning blueprint from {} @ {}", source.repo_url, source.git_ref),
+    )
+    .await;
+
+    let work_dir = clone_blueprint(source).await?;
+
+    // 2. Inject backend.tf and tfvars
+    inject_backend_and_vars(&work_dir, backend, &req.variables)?;
+
     let env = build_env(&req.env_vars);
 
-    // 1. terraform init
+    // 3. terraform init
     let (code, stderr) = run_terraform(
         &["init", "-no-color"],
         &work_dir,
@@ -84,7 +104,7 @@ async fn execute_plan(
         return Ok(());
     }
 
-    // 2. terraform plan -out=plan.bin
+    // 4. terraform plan -out=plan.bin
     let (code, stderr) = run_terraform(
         &["plan", "-out=plan.bin", "-no-color", "-detailed-exitcode"],
         &work_dir,
@@ -100,7 +120,7 @@ async fn execute_plan(
         return Ok(());
     }
 
-    // 3. terraform show -json plan.bin  (raw diff for q-core)
+    // 5. terraform show -json plan.bin  (raw diff for q-core)
     let show_output = Command::new("terraform")
         .args(["show", "-json", "plan.bin"])
         .current_dir(&work_dir)
@@ -112,11 +132,11 @@ async fn execute_plan(
 
     let plan_json = show_output.stdout;
 
-    // 4. Read the binary planfile (q-core stores this, engine uses it for apply)
+    // 6. Read the binary planfile (q-core stores this, engine uses it for apply)
     let plan_binary =
         std::fs::read(work_dir.join("plan.bin")).context("failed to read plan.bin")?;
 
-    // 5. Parse summary counts from the plan JSON
+    // 7. Parse summary counts from the plan JSON
     let (add, change, destroy) = parse_plan_counts(&plan_json);
 
     tx.send(Ok(PlanEvent {
@@ -153,37 +173,87 @@ async fn send_result(
         .await;
 }
 
+/// Send a single log line to the gRPC stream.
+async fn stream_log(
+    tx: &mpsc::Sender<Result<PlanEvent, Status>>,
+    stream: LogStream,
+    line: String,
+) {
+    let _ = tx
+        .send(Ok(PlanEvent {
+            event: Some(plan_event::Event::Log(LogLine {
+                stream: stream.into(),
+                line,
+            })),
+        }))
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Blueprint fetching (git clone)
+// ---------------------------------------------------------------------------
+
+/// Shallow-clone a public git repo at a specific ref, return the blueprint directory.
+async fn clone_blueprint(source: &BlueprintSource) -> Result<PathBuf> {
+    let clone_dir = tempfile::TempDir::new()
+        .context("failed to create clone temp dir")?
+        .keep();
+
+    let status = Command::new("git")
+        .args([
+            "clone",
+            "--depth=1",
+            "--single-branch",
+            "--branch",
+            &source.git_ref,
+            &source.repo_url,
+            clone_dir.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status()
+        .await
+        .context("failed to spawn git clone")?;
+
+    if !status.success() {
+        bail!(
+            "git clone failed (exit {}): repo={} ref={}",
+            status.code().unwrap_or(-1),
+            source.repo_url,
+            source.git_ref
+        );
+    }
+
+    // Resolve the blueprint subdirectory
+    if source.path.is_empty() {
+        Ok(clone_dir)
+    } else {
+        let sub = clone_dir.join(&source.path);
+        if !sub.is_dir() {
+            bail!(
+                "blueprint path '{}' not found in repo at ref '{}'",
+                source.path,
+                source.git_ref
+            );
+        }
+        Ok(sub)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Workspace preparation
 // ---------------------------------------------------------------------------
 
-/// Write blueprint files, generated backend.tf, and tfvars into a temp directory.
-fn prepare_workspace(
-    files: &[BlueprintFile],
+/// Inject backend.tf and terraform.tfvars.json into the blueprint directory.
+fn inject_backend_and_vars(
+    work_dir: &Path,
     backend: &S3BackendConfig,
     variables: &std::collections::HashMap<String, String>,
-) -> Result<PathBuf> {
-    let work_dir = tempfile::TempDir::new()
-        .context("failed to create temp dir")?
-        .keep();
-
-    // Write blueprint files sent by q-core
-    for file in files {
-        let dest = work_dir.join(&file.path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create dir for {}", file.path))?;
-        }
-        std::fs::write(&dest, &file.content)
-            .with_context(|| format!("failed to write {}", file.path))?;
-    }
-
-    // Inject backend.tf for S3 state
+) -> Result<()> {
     let backend_tf = generate_backend_tf(backend);
     std::fs::write(work_dir.join("backend.tf"), backend_tf)
         .context("failed to write backend.tf")?;
 
-    // Write variables to terraform.tfvars.json
     if !variables.is_empty() {
         let tfvars_json =
             serde_json::to_string_pretty(variables).context("failed to serialize variables")?;
@@ -191,7 +261,7 @@ fn prepare_workspace(
             .context("failed to write terraform.tfvars.json")?;
     }
 
-    Ok(work_dir)
+    Ok(())
 }
 
 /// Generate backend.tf for S3 state storage.
@@ -229,23 +299,19 @@ fn generate_backend_tf(cfg: &S3BackendConfig) -> String {
 fn build_env(env_vars: &[EnvVar]) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
 
-    // Inherit essentials
     if let Ok(path) = std::env::var("PATH") {
         env.push(("PATH".into(), path));
     }
     if let Ok(home) = std::env::var("HOME") {
         env.push(("HOME".into(), home));
     }
-    // Inherit TF plugin cache dir if set
     if let Ok(cache) = std::env::var("TF_PLUGIN_CACHE_DIR") {
         env.push(("TF_PLUGIN_CACHE_DIR".into(), cache));
     }
 
-    // Automation flags
     env.push(("TF_INPUT".into(), "false".into()));
     env.push(("TF_IN_AUTOMATION".into(), "1".into()));
 
-    // Caller-provided credentials and config
     for var in env_vars {
         env.push((var.name.clone(), var.value.clone()));
     }
@@ -276,7 +342,6 @@ async fn run_terraform(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
-    // Stream stdout
     let tx_out = tx.clone();
     let stdout_handle = tokio::spawn(async move {
         let reader = BufReader::new(stdout);
@@ -293,7 +358,6 @@ async fn run_terraform(
         }
     });
 
-    // Stream stderr and collect it for error reporting
     let tx_err = tx.clone();
     let stderr_handle = tokio::spawn(async move {
         let reader = BufReader::new(stderr);

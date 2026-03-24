@@ -1,0 +1,18 @@
+{
+  "operation_id": "plan-aws-s3-001",
+  "source": {
+    "repo_url": "https://github.com/Astach/service-catalog.git",
+    "git_ref": "main",
+    "path": "v2/examples/aws-s3"
+  },
+  "variables": {
+    "bucket_name": "my-test-bucket",
+    "region": "eu-west-3"
+  },
+  "backend": {
+    "bucket": "service-catalog-tf-states",
+    "key": "3d542888-3d2c-474a-b1ad-712556db66da/8c77834c-12aa-4448-b210-a324727f489a/5b2299d6-fc5b-415b-a994-16bf04d73158/aws-s3/terraform.tfstate",
+    "region": "eu-west-3",
+    "encrypt": false
+  }
+}

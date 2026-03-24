@@ -27,7 +27,7 @@
 | T3 | Provider = credential selector | `spec.provider` tells the engine which credentials to inject. `aws` → cluster AWS creds. `qovery` → `QOVERY_API_TOKEN`. `helm` → kubeconfig. |
 | T4 | Plan storage | Plans (JSON + binary planfile) stored in DB. Statuses: `PENDING_REVIEW`, `APPROVED`, `APPLIED`, `REJECTED`, `EXPIRED`, `FAILED`. |
 | T5 | State storage | Each provisioned stack gets its own TF state in **S3 backend** (key: `catalog/{instance_id}/terraform.tfstate`). Optional DynamoDB locking. Shared between TF runner and engine. |
-| T6 | Where TF runs | **Planning**: Rust gRPC service (`runner/`) on Qovery's infra -- plan only. **Applying**: engine on the customer's cluster runs `terraform apply plan.bin`. |
+| T6 | Where TF runs | **Planning**: Rust gRPC service (`runner/`) on Qovery's infra -- clones the blueprint repo, runs `terraform plan` only. **Applying**: engine on the customer's cluster runs `terraform apply plan.bin`. |
 | T7 | Cache | In-memory in q-core. Invalidated by GitHub webhook. |
 | T8 | Version index | Built from git tags via GitHub API. |
 | T9 | Service binding | `catalog_service` record in DB links provisioned instance → blueprint name + version + TF state. |
@@ -46,7 +46,7 @@
 
 1. Click "Provision" on a blueprint card
 2. Fill in variables (form from `qsm.yml`). Qovery variables are pre-filled, some overridable.
-3. q-core sends blueprint to **TF runner** → `terraform plan` → user reviews diff
+3. q-core sends blueprint reference (repo + tag + path) to **TF runner** → runner clones, runs `terraform plan` → user reviews diff
 4. User approves → q-core sends plan binary to **engine** → `terraform apply plan.bin`
 5. Resources created in customer's cloud account. Service tracked in `catalog_service` record.
 
