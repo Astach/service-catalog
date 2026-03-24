@@ -46,9 +46,9 @@ RUN ARCH=$(case "${TARGETARCH}" in \
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-  apt-get install -y \
-  ca-certificates --no-install-recommends \
-  git \
+  apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
   && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security

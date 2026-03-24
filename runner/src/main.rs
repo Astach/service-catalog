@@ -199,7 +199,7 @@ async fn clone_blueprint(source: &BlueprintSource) -> Result<PathBuf> {
         .context("failed to create clone temp dir")?
         .keep();
 
-    let status = Command::new("git")
+    let output = Command::new("git")
         .args([
             "clone",
             "--depth=1",
@@ -211,16 +211,18 @@ async fn clone_blueprint(source: &BlueprintSource) -> Result<PathBuf> {
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .status()
+        .output()
         .await
         .context("failed to spawn git clone")?;
 
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
-            "git clone failed (exit {}): repo={} ref={}",
-            status.code().unwrap_or(-1),
+            "git clone failed (exit {}): repo={} ref={}\n{}",
+            output.status.code().unwrap_or(-1),
             source.repo_url,
-            source.git_ref
+            source.git_ref,
+            stderr.trim()
         );
     }
 
