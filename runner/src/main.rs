@@ -61,10 +61,7 @@ impl TerraformRunner for TfRunnerService {
 // Plan execution
 // ---------------------------------------------------------------------------
 
-async fn execute_plan(
-    req: PlanRequest,
-    tx: mpsc::Sender<Result<PlanEvent, Status>>,
-) -> Result<()> {
+async fn execute_plan(req: PlanRequest, tx: mpsc::Sender<Result<PlanEvent, Status>>) -> Result<()> {
     let source = req.source.as_ref().context("missing blueprint source")?;
     let backend = req.backend.as_ref().context("missing backend config")?;
 
@@ -78,7 +75,10 @@ async fn execute_plan(
     stream_log(
         &tx,
         LogStream::Stdout,
-        format!("Cloning blueprint from {} @ {}", source.repo_url, source.git_ref),
+        format!(
+            "Cloning blueprint from {} @ {}",
+            source.repo_url, source.git_ref
+        ),
     )
     .await;
 
@@ -90,13 +90,7 @@ async fn execute_plan(
     let env = build_env(&req.env_vars);
 
     // 3. terraform init
-    let (code, stderr) = run_terraform(
-        &["init", "-no-color"],
-        &work_dir,
-        &env,
-        &tx,
-    )
-    .await?;
+    let (code, stderr) = run_terraform(&["init", "-no-color"], &work_dir, &env, &tx).await?;
 
     if code != 0 {
         send_result(&tx, false, format!("terraform init failed: {stderr}")).await;
@@ -157,11 +151,7 @@ async fn execute_plan(
     Ok(())
 }
 
-async fn send_result(
-    tx: &mpsc::Sender<Result<PlanEvent, Status>>,
-    success: bool,
-    error: String,
-) {
+async fn send_result(tx: &mpsc::Sender<Result<PlanEvent, Status>>, success: bool, error: String) {
     let _ = tx
         .send(Ok(PlanEvent {
             event: Some(plan_event::Event::Result(PlanResult {
@@ -174,11 +164,7 @@ async fn send_result(
 }
 
 /// Send a single log line to the gRPC stream.
-async fn stream_log(
-    tx: &mpsc::Sender<Result<PlanEvent, Status>>,
-    stream: LogStream,
-    line: String,
-) {
+async fn stream_log(tx: &mpsc::Sender<Result<PlanEvent, Status>>, stream: LogStream, line: String) {
     let _ = tx
         .send(Ok(PlanEvent {
             event: Some(plan_event::Event::Log(LogLine {
@@ -301,19 +287,28 @@ fn generate_backend_tf(cfg: &S3BackendConfig) -> String {
 fn build_env(env_vars: &[EnvVar]) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
 
-    if let Ok(path) = std::env::var("PATH") {
-        env.push(("PATH".into(), path));
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        env.push(("HOME".into(), home));
-    }
-    if let Ok(cache) = std::env::var("TF_PLUGIN_CACHE_DIR") {
-        env.push(("TF_PLUGIN_CACHE_DIR".into(), cache));
+    // Inherit essentials from the container environment
+    let inherit = [
+        "PATH",
+        "HOME",
+        "TF_PLUGIN_CACHE_DIR",
+        // AWS credentials for the S3 state backend (set on the Qovery service)
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ];
+    for key in inherit {
+        if let Ok(val) = std::env::var(key) {
+            env.push((key.into(), val));
+        }
     }
 
+    // Automation flags
     env.push(("TF_INPUT".into(), "false".into()));
     env.push(("TF_IN_AUTOMATION".into(), "1".into()));
 
+    // Caller-provided env vars (e.g. customer credentials for the TF provider).
+    // These are added last so they can override inherited values if needed.
     for var in env_vars {
         env.push((var.name.clone(), var.value.clone()));
     }
@@ -447,8 +442,7 @@ fn cleanup(work_dir: &Path) {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .json()
         .init();
