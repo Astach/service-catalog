@@ -4,15 +4,16 @@ package terraform.runner.v1;
 
 // TerraformRunner is a plan-only gRPC service running on Qovery's infrastructure.
 //
-// q-core sends fully-interpolated blueprint files, variables, and S3 backend
-// configuration. The runner writes them to a temp workspace, injects backend.tf,
-// runs `terraform init` + `terraform plan`, and streams the diff back.
+// q-core sends a blueprint reference (repo + tag + path) or pre-assembled files,
+// along with variables and S3 backend configuration. The runner fetches the
+// blueprint, writes tfvars, injects backend.tf, runs `terraform init` +
+// `terraform plan`, and streams the diff back.
 //
 // Apply and destroy are handled by the engine (which runs on the customer's
 // cluster and has direct access to the target cloud provider).
 service TerraformRunner {
-  // Plan runs `terraform init` + `terraform plan` and streams log output
-  // followed by the plan result (raw `terraform show -json` + binary planfile).
+  // Plan fetches the blueprint, runs `terraform init` + `terraform plan`,
+  // and streams log output followed by the plan result.
   rpc Plan(PlanRequest) returns (stream PlanEvent);
 }
 
@@ -20,7 +21,20 @@ service TerraformRunner {
 // Common types
 // ---------------------------------------------------------------------------
 
+// Reference to a blueprint in a public git repository.
+// The runner shallow-clones the repo at the given ref and reads TF files from the subdirectory.
+message BlueprintSource {
+  // Git clone URL (e.g. "https://github.com/Astach/service-catalog.git").
+  string repo_url = 1;
+  // Git ref to checkout -- typically a tag (e.g. "aws-s3/1.0.0") or a commit SHA.
+  string git_ref = 2;
+  // Subdirectory within the repo containing the .tf files (e.g. "v2/examples/aws-s3").
+  // If empty, the repo root is used.
+  string path = 3;
+}
+
 // A single file to be written into the Terraform working directory.
+// Used as a fallback when q-core sends pre-assembled files instead of a git reference.
 message BlueprintFile {
   // Relative path within the working directory (e.g. "main.tf", "modules/vpc/main.tf").
   string path = 1;
@@ -55,22 +69,24 @@ message PlanRequest {
   // Unique identifier for this operation (for tracing/correlation).
   string operation_id = 1;
 
-  // The fully-interpolated blueprint files (main.tf, variables.tf, outputs.tf, providers.tf).
-  // q-core is responsible for fetching the blueprint from the catalog repo and
-  // resolving qoveryVariables before sending them here.
-  repeated BlueprintFile files = 2;
+  // Primary: runner fetches the blueprint from a public git repo.
+  BlueprintSource source = 2;
+
+  // Fallback: q-core sends pre-assembled files directly.
+  // If both source and files are provided, files takes precedence.
+  repeated BlueprintFile files = 3;
 
   // Terraform variable values (written to terraform.tfvars.json).
-  map<string, string> variables = 3;
+  map<string, string> variables = 4;
 
   // S3 backend configuration -- the runner generates backend.tf from this.
-  S3BackendConfig backend = 4;
+  S3BackendConfig backend = 5;
 
   // Environment variables for the Terraform process (credentials, provider config).
-  repeated EnvVar env_vars = 5;
+  repeated EnvVar env_vars = 6;
 
   // Terraform version constraint (e.g. "1.9.0"). If empty, uses the bundled version.
-  string terraform_version = 6;
+  string terraform_version = 7;
 }
 
 // Streamed response: log lines during execution, followed by a final PlanResult.

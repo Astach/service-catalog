@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -66,7 +66,28 @@ async fn execute_plan(
     tx: mpsc::Sender<Result<PlanEvent, Status>>,
 ) -> Result<()> {
     let backend = req.backend.as_ref().context("missing backend config")?;
-    let work_dir = prepare_workspace(&req.files, backend, &req.variables)?;
+
+    // Resolve blueprint files: either from git source or inline files.
+    // If both are provided, inline files take precedence.
+    let work_dir = if !req.files.is_empty() {
+        info!("using inline blueprint files");
+        prepare_workspace_from_files(&req.files, backend, &req.variables)?
+    } else if let Some(source) = &req.source {
+        info!(
+            repo = %source.repo_url,
+            git_ref = %source.git_ref,
+            path = %source.path,
+            "fetching blueprint from git"
+        );
+        stream_log(&tx, LogStream::Stdout, format!(
+            "Cloning blueprint from {} @ {}",
+            source.repo_url, source.git_ref
+        )).await;
+        prepare_workspace_from_git(source, backend, &req.variables).await?
+    } else {
+        bail!("request must include either `source` (git reference) or `files` (inline)");
+    };
+
     let env = build_env(&req.env_vars);
 
     // 1. terraform init
@@ -153,12 +174,83 @@ async fn send_result(
         .await;
 }
 
+/// Send a single log line to the gRPC stream.
+async fn stream_log(
+    tx: &mpsc::Sender<Result<PlanEvent, Status>>,
+    stream: LogStream,
+    line: String,
+) {
+    let _ = tx
+        .send(Ok(PlanEvent {
+            event: Some(plan_event::Event::Log(LogLine {
+                stream: stream.into(),
+                line,
+            })),
+        }))
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Blueprint fetching (git clone)
+// ---------------------------------------------------------------------------
+
+/// Clone a public git repo at a specific ref and return the path to the blueprint subdirectory.
+async fn clone_blueprint(source: &BlueprintSource) -> Result<PathBuf> {
+    let clone_dir = tempfile::TempDir::new()
+        .context("failed to create clone temp dir")?
+        .keep();
+
+    // Shallow clone at the exact ref.
+    // For tags like "aws-s3/1.0.0" we need to fetch the specific ref.
+    let status = Command::new("git")
+        .args([
+            "clone",
+            "--depth=1",
+            "--single-branch",
+            "--branch",
+            &source.git_ref,
+            &source.repo_url,
+            clone_dir.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status()
+        .await
+        .context("failed to spawn git clone")?;
+
+    if !status.success() {
+        bail!(
+            "git clone failed (exit {}): repo={} ref={}",
+            status.code().unwrap_or(-1),
+            source.repo_url,
+            source.git_ref
+        );
+    }
+
+    // Resolve the blueprint subdirectory
+    let blueprint_dir = if source.path.is_empty() {
+        clone_dir
+    } else {
+        let sub = clone_dir.join(&source.path);
+        if !sub.is_dir() {
+            bail!(
+                "blueprint path '{}' not found in repo at ref '{}'",
+                source.path,
+                source.git_ref
+            );
+        }
+        sub
+    };
+
+    Ok(blueprint_dir)
+}
+
 // ---------------------------------------------------------------------------
 // Workspace preparation
 // ---------------------------------------------------------------------------
 
-/// Write blueprint files, generated backend.tf, and tfvars into a temp directory.
-fn prepare_workspace(
+/// Prepare workspace from inline files sent by q-core.
+fn prepare_workspace_from_files(
     files: &[BlueprintFile],
     backend: &S3BackendConfig,
     variables: &std::collections::HashMap<String, String>,
@@ -167,7 +259,6 @@ fn prepare_workspace(
         .context("failed to create temp dir")?
         .keep();
 
-    // Write blueprint files sent by q-core
     for file in files {
         let dest = work_dir.join(&file.path);
         if let Some(parent) = dest.parent() {
@@ -178,7 +269,28 @@ fn prepare_workspace(
             .with_context(|| format!("failed to write {}", file.path))?;
     }
 
-    // Inject backend.tf for S3 state
+    inject_backend_and_vars(&work_dir, backend, variables)?;
+    Ok(work_dir)
+}
+
+/// Prepare workspace by cloning a blueprint from git.
+async fn prepare_workspace_from_git(
+    source: &BlueprintSource,
+    backend: &S3BackendConfig,
+    variables: &std::collections::HashMap<String, String>,
+) -> Result<PathBuf> {
+    let blueprint_dir = clone_blueprint(source).await?;
+    inject_backend_and_vars(&blueprint_dir, backend, variables)?;
+    Ok(blueprint_dir)
+}
+
+/// Inject backend.tf and terraform.tfvars.json into an existing workspace directory.
+fn inject_backend_and_vars(
+    work_dir: &Path,
+    backend: &S3BackendConfig,
+    variables: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    // Generate and write backend.tf for S3 state
     let backend_tf = generate_backend_tf(backend);
     std::fs::write(work_dir.join("backend.tf"), backend_tf)
         .context("failed to write backend.tf")?;
@@ -191,7 +303,7 @@ fn prepare_workspace(
             .context("failed to write terraform.tfvars.json")?;
     }
 
-    Ok(work_dir)
+    Ok(())
 }
 
 /// Generate backend.tf for S3 state storage.

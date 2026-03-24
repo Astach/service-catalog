@@ -45,7 +45,8 @@ graph TB
     BlueprintRegistry --> GitHub --> Repo
     CatalogApi --> PlanService
 
-    PlanService -->|"gRPC: Plan()"| TfRunner
+    PlanService -->|"gRPC: Plan(source + vars)"| TfRunner
+    TfRunner -->|"clones blueprint"| Repo
     TfRunner -->|"reads state"| S3State
     TfRunner -->|"plan JSON + binary"| PlanService --> PlanStore
 
@@ -98,9 +99,10 @@ sequenceDiagram
     User ->> Console: Select blueprint + fill variables
     Console ->> qcore: POST /catalog/plan
 
-    Note over qcore: Fetch blueprint from catalog repo,<br/>resolve qoveryVariables,<br/>merge with user vars
+    Note over qcore: Resolve qoveryVariables,<br/>merge with user vars
 
-    qcore ->> Runner: gRPC Plan() with files + vars + S3 backend
+    qcore ->> Runner: gRPC Plan() with source (repo + tag + path) + vars + S3 backend
+    Note over Runner: Shallow-clone blueprint repo at tag,<br/>inject backend.tf + tfvars
     Runner -->> qcore: stream: log lines
     Runner -->> qcore: stream: PlanResult (plan JSON + plan binary)
 
@@ -242,14 +244,17 @@ When a new version only changes `metadata` (description, icon, categories) and `
 
 q-core calls the TF runner via gRPC `Plan()`:
 
-1. Runner receives interpolated blueprint files + variables + S3 backend config + env vars
-2. Writes files to temp workspace, generates `backend.tf` from S3 config
-3. Runs `terraform init` (downloads providers, connects to S3 state)
-4. Runs `terraform plan -out=plan.bin` (compares desired state vs current S3 state)
-5. Runs `terraform show -json plan.bin` to produce the raw diff JSON
-6. Streams log lines back to q-core during execution
-7. Returns `PlanResult` with raw plan JSON + binary planfile + resource counts
-8. Cleans up temp workspace
+1. Runner receives a blueprint reference (repo URL + git tag + subdirectory path), variables, S3 backend config, and env vars
+2. Shallow-clones the blueprint repo at the specified tag, reads .tf files from the subdirectory
+3. Injects `backend.tf` (generated from S3 config) and `terraform.tfvars.json` into the workspace
+4. Runs `terraform init` (downloads providers, connects to S3 state)
+5. Runs `terraform plan -out=plan.bin` (compares desired state vs current S3 state)
+6. Runs `terraform show -json plan.bin` to produce the raw diff JSON
+7. Streams log lines back to q-core during execution
+8. Returns `PlanResult` with raw plan JSON + binary planfile + resource counts
+9. Cleans up temp workspace
+
+Alternatively, q-core can send pre-assembled files directly (fallback mode for testing or edge cases).
 
 ### Apply Phase (engine, customer cluster)
 
