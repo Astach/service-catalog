@@ -6,7 +6,9 @@
 
 ## Overview
 
-Blueprints are standard Terraform modules with a `qsm.yml` manifest. `spec.provider` determines which credentials the engine injects (AWS, GCP, Qovery, Helm, etc.). All blueprints follow the same plan → review → approve → apply workflow.
+Blueprints are standard Terraform modules with a `qsm.yml` manifest. `spec.provider` determines which credentials are injected. All blueprints follow the same plan → review → approve → apply workflow.
+
+Planning happens on **Qovery's infrastructure** (TF runner). Applying happens on the **customer's cluster** (engine).
 
 ---
 
@@ -23,31 +25,39 @@ graph TB
         Cache["Cache"]
     end
 
-    subgraph engine["Engine"]
-        PlanRunner["terraform plan"]
-        ApplyRunner["terraform apply"]
+    subgraph qovery_infra["Qovery Infrastructure"]
+        TfRunner["TF Runner<br/>(Rust gRPC + Terraform CLI)<br/>plan only"]
     end
 
+    subgraph customer["Customer Cluster"]
+        Engine["Engine<br/>apply / destroy"]
+    end
+
+    S3State[("S3 State Bucket")]
     GitHub["GitHub API"]
     Repo["Blueprint Repo"]
-    PlanStore[("Plan Store")]
-    Target["Target<br/>(AWS, Qovery API,<br/>K8s for Helm)"]
+    PlanStore[("Plan Store<br/>(plan JSON + binary)")]
+    Target["Target<br/>(AWS, GCP, Azure,<br/>Qovery API, K8s)"]
 
     Console -->|"POST /catalog/plan"| CatalogApi
     CatalogApi --> BlueprintRegistry
     BlueprintRegistry --> Cache
     BlueprintRegistry --> GitHub --> Repo
-    CatalogApi --> PlanService --> PlanStore
-    PlanService -->|"plan"| PlanRunner --> PlanStore
+    CatalogApi --> PlanService
+
+    PlanService -->|"gRPC: Plan()"| TfRunner
+    TfRunner -->|"reads state"| S3State
+    TfRunner -->|"plan JSON + binary"| PlanService --> PlanStore
 
     Console -->|"POST /catalog/plans/{id}/approve"| CatalogApi
-    CatalogApi --> PlanService
-    PlanService -->|"apply"| ApplyRunner --> Target
+    CatalogApi -->|"plan binary + blueprint"| Engine
+    Engine -->|"terraform apply plan.bin"| Target
+    Engine -->|"writes state"| S3State
 ```
 
 ### Credential Injection
 
-The engine reads `spec.provider` from the QSM and injects the appropriate credentials before running Terraform:
+q-core reads `spec.provider` from the QSM and injects the appropriate credentials into both the TF runner (for plan) and the engine (for apply):
 
 | `spec.provider` | Injected credentials |
 |---|---|
@@ -57,7 +67,7 @@ The engine reads `spec.provider` from the QSM and injects the appropriate creden
 | `qovery` | `QOVERY_API_TOKEN` (org-scoped) |
 | `helm` | `KUBECONFIG` (from cluster) |
 
-For StackBlueprints with mixed providers, the engine injects all needed credentials.
+For StackBlueprints with mixed providers, all needed credentials are injected.
 
 ---
 
@@ -66,10 +76,10 @@ For StackBlueprints with mixed providers, the engine injects all needed credenti
 ```
 1. BROWSE    → User selects a blueprint
 2. CONFIGURE → User fills in variables (qoveryVariables pre-filled)
-3. PLAN      → Engine runs terraform plan, stores JSON + binary planfile
+3. PLAN      → TF runner runs terraform plan, returns diff + binary planfile
 4. REVIEW    → User sees what will be created/changed/destroyed
 5. APPROVE   → User approves
-6. APPLY     → Engine runs terraform apply plan.bin
+6. APPLY     → Engine runs terraform apply plan.bin on customer's cluster
 7. DONE      → Resources created, service tracked in catalog DB
 ```
 
@@ -80,28 +90,30 @@ sequenceDiagram
     actor User
     participant Console
     participant qcore as q-core
-    participant Engine
+    participant Runner as TF Runner (Qovery infra)
     participant PlanStore as Plan Store
-    participant Target as Target (AWS/Qovery/K8s)
+    participant Engine as Engine (customer cluster)
+    participant Target as Target (AWS/GCP/K8s)
 
     User ->> Console: Select blueprint + fill variables
     Console ->> qcore: POST /catalog/plan
 
-    Note over qcore: Fetch blueprint, resolve qoveryVariables,<br/>merge with user vars, generate tfvars
+    Note over qcore: Fetch blueprint from catalog repo,<br/>resolve qoveryVariables,<br/>merge with user vars
 
-    qcore ->> Engine: terraform plan -out=plan.bin
-    Engine -->> qcore: Plan JSON
+    qcore ->> Runner: gRPC Plan() with files + vars + S3 backend
+    Runner -->> qcore: stream: log lines
+    Runner -->> qcore: stream: PlanResult (plan JSON + plan binary)
 
-    qcore ->> PlanStore: Store (PENDING_REVIEW)
-    qcore -->> Console: {plan_id, summary}
+    qcore ->> PlanStore: Store plan (PENDING_REVIEW)
+    qcore -->> Console: {plan_id, summary, diff}
     Console -->> User: Show plan diff
 
     User ->> Console: Approve
     Console ->> qcore: POST /catalog/plans/{id}/approve
 
-    qcore ->> Engine: terraform apply plan.bin
-    Engine ->> Target: Create resources
-    Engine -->> qcore: Done
+    qcore ->> Engine: plan binary + blueprint files + S3 backend config
+    Engine ->> Target: terraform apply plan.bin
+    Engine -->> qcore: Done (outputs)
 
     qcore ->> PlanStore: APPLIED
     Console -->> User: Resources created
@@ -130,8 +142,8 @@ flowchart TD
 | `blueprint_version` | String | e.g. `1.0.0` |
 | `environment_id` | UUID | Target environment |
 | `variables` | JSON | User-provided values |
-| `plan_json` | JSON | `terraform show -json` output |
-| `plan_binary` | Blob | Binary planfile for exact apply |
+| `plan_json` | JSON | Raw `terraform show -json` output (from TF runner) |
+| `plan_binary` | Blob | Binary planfile for exact apply (from TF runner, forwarded to engine) |
 | `status` | Enum | `PENDING_REVIEW`, `APPROVED`, `APPLYING`, `APPLIED`, `REJECTED`, `EXPIRED`, `FAILED`, `SUPERSEDED` |
 | `created_at` | Timestamp | |
 | `expires_at` | Timestamp | Auto-expire after 1h |
@@ -217,32 +229,39 @@ When a new version only changes `metadata` (description, icon, categories) and `
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/catalog/plan` | Create a plan |
+| `POST` | `/catalog/plan` | Create a plan (q-core calls TF runner) |
 | `GET` | `/catalog/plans/{id}` | Get plan details |
-| `POST` | `/catalog/plans/{id}/approve` | Approve and apply |
+| `POST` | `/catalog/plans/{id}/approve` | Approve and apply (q-core forwards to engine) |
 | `POST` | `/catalog/plans/{id}/reject` | Reject |
 
 ---
 
-## Engine Integration
+## TF Runner Integration
 
-### Plan Phase
+### Plan Phase (TF runner, Qovery infra)
 
-```bash
-# Credentials already injected based on spec.provider
-terraform init
-terraform plan -out=plan.bin -var-file=user.tfvars
-terraform show -json plan.bin > plan.json
-```
+q-core calls the TF runner via gRPC `Plan()`:
 
-### Apply Phase
+1. Runner receives interpolated blueprint files + variables + S3 backend config + env vars
+2. Writes files to temp workspace, generates `backend.tf` from S3 config
+3. Runs `terraform init` (downloads providers, connects to S3 state)
+4. Runs `terraform plan -out=plan.bin` (compares desired state vs current S3 state)
+5. Runs `terraform show -json plan.bin` to produce the raw diff JSON
+6. Streams log lines back to q-core during execution
+7. Returns `PlanResult` with raw plan JSON + binary planfile + resource counts
+8. Cleans up temp workspace
 
-```bash
-terraform apply plan.bin
-```
+### Apply Phase (engine, customer cluster)
+
+q-core sends the approved plan binary to the engine:
+
+1. Engine receives blueprint files + plan binary + S3 backend config + credentials
+2. Writes files, runs `terraform init` with same S3 backend
+3. Runs `terraform apply plan.bin` (exact apply of what the user approved)
+4. State updated in S3, outputs sent back to q-core
 
 Binary planfile ensures what the user approved is exactly what gets applied.
 
 ### State
 
-Each stack gets its own TF state in Kubernetes backend (Secret on customer's cluster). Linked to the `catalog_service` record for upgrades.
+Each stack gets its own TF state in S3 backend (key: `catalog/{instance_id}/terraform.tfstate`). Both the TF runner (plan) and the engine (apply) use the same S3 backend config, ensuring state consistency.

@@ -11,7 +11,7 @@
 |---|----------|--------|
 | P1 | Core concept | The catalog is a **plan-and-approve layer** on top of Terraform. Blueprints declare resources using any Terraform provider (AWS, GCP, Helm, Qovery, etc.). Users review a `terraform plan` before anything is applied. |
 | P2 | Blueprint scope | A single blueprint can create any cloud or Qovery resource. StackBlueprints compose multiple services with pipeline stages. |
-| P3 | Provider model | `spec.provider` determines what credentials the engine injects (`aws` → AWS creds, `qovery` → API token, `helm` → kubeconfig). |
+| P3 | Provider model | `spec.provider` determines what credentials q-core injects into the TF runner (plan) and the engine (apply). `aws` → AWS creds, `qovery` → API token, `helm` → kubeconfig. |
 | P4 | Dependency model | StackBlueprints use ordered stages. Services within a stage run in parallel, stages run sequentially. |
 | P5 | Versioning | Git-tag-based semver: `{blueprint-name}/{semver}`. |
 | P6 | Provisioning workflow | **Plan → Review → Approve → Apply.** Always. |
@@ -26,8 +26,8 @@
 | T2 | Runtime | Always **Terraform**. No separate Helm engine -- Helm charts are deployed via the `helm_release` Terraform resource. |
 | T3 | Provider = credential selector | `spec.provider` tells the engine which credentials to inject. `aws` → cluster AWS creds. `qovery` → `QOVERY_API_TOKEN`. `helm` → kubeconfig. |
 | T4 | Plan storage | Plans (JSON + binary planfile) stored in DB. Statuses: `PENDING_REVIEW`, `APPROVED`, `APPLIED`, `REJECTED`, `EXPIRED`, `FAILED`. |
-| T5 | State storage | Each provisioned stack gets its own TF state in Kubernetes backend (Secret on customer's cluster). |
-| T6 | Where TF runs | On Qovery's infrastructure (engine). |
+| T5 | State storage | Each provisioned stack gets its own TF state in **S3 backend** (key: `catalog/{instance_id}/terraform.tfstate`). Optional DynamoDB locking. Shared between TF runner and engine. |
+| T6 | Where TF runs | **Planning**: Rust gRPC service (`runner/`) on Qovery's infra -- plan only. **Applying**: engine on the customer's cluster runs `terraform apply plan.bin`. |
 | T7 | Cache | In-memory in q-core. Invalidated by GitHub webhook. |
 | T8 | Version index | Built from git tags via GitHub API. |
 | T9 | Service binding | `catalog_service` record in DB links provisioned instance → blueprint name + version + TF state. |
@@ -46,9 +46,9 @@
 
 1. Click "Provision" on a blueprint card
 2. Fill in variables (form from `qsm.yml`). Qovery variables are pre-filled, some overridable.
-3. Engine runs `terraform plan` → user reviews what will be created/changed/destroyed
-4. User approves → `terraform apply plan.bin`
-5. Resources created. Service tracked in `catalog_service` record.
+3. q-core sends blueprint to **TF runner** → `terraform plan` → user reviews diff
+4. User approves → q-core sends plan binary to **engine** → `terraform apply plan.bin`
+5. Resources created in customer's cloud account. Service tracked in `catalog_service` record.
 
 ### Upgrading
 
@@ -71,31 +71,40 @@ graph TB
         Cache["Cache"]
     end
 
-    subgraph engine["Engine"]
-        PlanRunner["terraform plan"]
-        ApplyRunner["terraform apply"]
+    subgraph qovery_infra["Qovery Infrastructure"]
+        TfRunner["TF Runner<br/>(Rust gRPC + Terraform CLI)<br/>plan only"]
     end
 
+    subgraph customer["Customer Cluster"]
+        Engine["Engine<br/>apply / destroy"]
+    end
+
+    S3State[("S3 State Bucket")]
     GitHub["GitHub API"]
     Repo["Blueprint Repo"]
     PlanStore[("Plan Store")]
-    Target["Target API/Cloud<br/>(AWS, Qovery API,<br/>K8s for Helm)"]
+    Target["Target API/Cloud<br/>(AWS, GCP, Azure,<br/>Qovery API, K8s)"]
 
     Console -->|"POST /catalog/plan"| CatalogApi
     CatalogApi --> BlueprintRegistry
     BlueprintRegistry --> Cache
     BlueprintRegistry --> GitHub --> Repo
-    CatalogApi --> PlanService --> PlanStore
-    PlanService -->|"plan"| PlanRunner --> PlanStore
+    CatalogApi --> PlanService
+    PlanService -->|"gRPC: Plan()"| TfRunner
+    TfRunner -->|"reads state"| S3State
+    TfRunner -->|"plan JSON + binary"| PlanService --> PlanStore
 
     Console -->|"POST /catalog/plans/{id}/approve"| CatalogApi
-    CatalogApi --> PlanService
-    PlanService -->|"apply"| ApplyRunner --> Target
+    CatalogApi -->|"plan binary"| Engine
+    Engine -->|"terraform apply"| Target
+    Engine -->|"writes state"| S3State
 ```
 
 ### Credential Injection
 
-| `spec.provider` | Credentials the engine injects |
+q-core injects credentials into both the TF runner (for plan) and the engine (for apply):
+
+| `spec.provider` | Credentials injected |
 |---|---|
 | `aws` | AWS access key/secret (from cluster config) |
 | `gcp` | GCP service account JSON (from cluster config) |
@@ -256,7 +265,7 @@ Each provisioned blueprint instance is tracked by a `catalog_service` record in 
 | `environment_id` | Target environment |
 | `blueprint_name` | e.g. `aws-s3` |
 | `blueprint_version` | Version at provisioning time |
-| `terraform_state_ref` | Reference to K8s Secret holding TF state |
+| `terraform_state_ref` | S3 key for the TF state (e.g. `catalog/{id}/terraform.tfstate`) |
 | `variables` | User-provided values |
 
 This is how q-core knows "this service was created from blueprint X at version Y" -- enabling upgrade detection and plan diffs against existing state.

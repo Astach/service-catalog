@@ -15,11 +15,11 @@
 ### Review & Apply
 
 4. Customer clicks "Review Update"
-5. q-core loads existing TF state + fetches new blueprint version
-6. Engine runs `terraform plan` (new TF files against existing state)
+5. q-core fetches new blueprint version, interpolates variables, sends to **TF runner**
+6. TF runner runs `terraform plan` (new TF files against existing S3 state) → streams diff back
 7. Plan shows what changes (e.g., `+ aws_s3_bucket_lifecycle_configuration.this`)
 8. Customer reviews → approves (or rejects)
-9. Engine runs `terraform apply plan.bin`
+9. q-core forwards plan binary to the **engine** → engine runs `terraform apply plan.bin`
 10. State updated, `catalog_blueprint_version` bumped to `1.1.0`
 
 ### If the customer doesn't upgrade
@@ -33,19 +33,45 @@ Nothing happens. Service stays pinned to `1.0.0`. Badge stays visible.
 ### TF state
 
 - Each provisioned stack gets its own TF state
-- Stored in Kubernetes backend (Secret on customer's cluster, dedicated namespace)
-- Keyed by unique instance identifier (not blueprint name)
-- On upgrade, engine loads this state so `terraform plan` produces accurate diff
+- Stored in **S3 backend** (dedicated bucket, one key per instance)
+- Key format: `catalog/{instance_id}/terraform.tfstate`
+- Optional DynamoDB table for state locking
+- Encryption at rest enabled by default
+- Both the TF runner (plan) and the engine (apply) use the same S3 backend config
 
-### TF runner
+### TF runner (plan only)
 
-- Runs on **Qovery's infrastructure** (engine)
-- Credentials injected based on `spec.provider`:
-  - `aws` → cluster's AWS creds → engine talks directly to AWS APIs
-  - `qovery` → org-scoped API token → engine talks to Qovery API
-  - `helm` → kubeconfig → engine talks to customer's K8s cluster
-- Token/credential scoping ensures isolation between customers
-- State read/write goes through K8s API of the customer's cluster
+- **Rust gRPC service** packaged with the Terraform CLI in a single Docker image (`runner/`)
+- Runs on **Qovery's infrastructure**, not on the customer's cluster
+- **Only runs `terraform plan`** -- never apply or destroy
+- q-core sends fully-interpolated blueprint files + variables + S3 backend config via gRPC
+- Runner writes files to a temp workspace, injects `backend.tf`, runs `terraform init` + `terraform plan`
+- Streams stdout/stderr back to q-core in real-time via gRPC server streaming
+- Returns the raw `terraform show -json` diff + binary planfile
+- q-core stores the plan JSON (for the UI) and binary planfile (for the engine to apply)
+- Credentials injected as environment variables based on `spec.provider`:
+  - `aws` → `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (from cluster config)
+  - `qovery` → `QOVERY_API_TOKEN` (org-scoped)
+  - `helm` → `KUBECONFIG` (from cluster)
+- Runner needs S3 read access to the state bucket (for `terraform init` to load current state)
+
+### Engine (apply / destroy)
+
+- Runs on the **customer's cluster** (existing engine infrastructure)
+- Receives the approved plan binary from q-core after user approval
+- Runs `terraform apply plan.bin` or `terraform plan -destroy` + `terraform apply`
+- Has direct access to the target cloud provider (AWS, GCP, etc.) via injected credentials
+- Can create resources outside of Kubernetes (S3 buckets, RDS instances, etc.) -- the engine's existing `TerraformInfraResources` pattern supports this
+- Resources created by the engine live in the customer's cloud account, tied to their cluster
+
+### Service location
+
+A catalog service is always tied to a specific Qovery environment:
+
+- Environment → namespace in a K8s cluster, or a standalone cluster
+- Resources created via catalog (e.g., an S3 bucket, an RDS instance) are created in the cloud account associated with that cluster
+- The `catalog_service` record in q-core links: `environment_id` → `cluster` → cloud account
+- This ensures resources are visible/reachable from the correct context, even though they may not live inside Kubernetes
 
 ---
 
@@ -54,10 +80,10 @@ Nothing happens. Service stays pinned to `1.0.0`. Badge stays visible.
 Every provisioned instance is tracked by a **catalog_service** record in q-core's DB:
 
 - `id` -- unique instance identifier
-- `environment_id` -- target environment
+- `environment_id` -- target environment (maps to a cluster + namespace)
 - `blueprint_name` -- e.g. `aws-s3`
 - `blueprint_version` -- version at provisioning time
-- `terraform_state_ref` -- reference to K8s Secret holding TF state
+- `terraform_state_ref` -- S3 key for the TF state (e.g. `catalog/{id}/terraform.tfstate`)
 - `variables` -- user-provided values
 
 ### How it works
@@ -70,8 +96,8 @@ That's it. The `catalog_service` record is the single source of truth for "this 
 
 ### Destroy
 
-1. "Destroy" → `terraform plan -destroy` → user reviews → approves
-2. `terraform apply plan.bin` destroys all resources
+1. "Destroy" → q-core sends blueprint to TF runner → `terraform plan -destroy` → user reviews → approves
+2. q-core sends destroy plan binary to engine → `terraform apply plan.bin` destroys all resources
 3. `catalog_service` marked destroyed, state cleaned up
 
 ---
