@@ -26,7 +26,7 @@ graph TB
 
     Repo["Blueprint Repo<br/>(GitHub)"]
 
-    subgraph customer["Customer Cluster"]
+    subgraph engine
         Engine["Engine<br/>(new CatalogService type)"]
         Job["K8s Job<br/>(terraform / helm)"]
     end
@@ -78,7 +78,7 @@ sequenceDiagram
     actor User
     participant Console
     participant qcore as q-core
-    participant Engine as Engine (customer cluster)
+    participant Engine as Engine
     participant Cloud as Cloud / K8s
 
     User->>Console: Browse catalog
