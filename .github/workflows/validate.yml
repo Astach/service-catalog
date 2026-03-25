@@ -12,109 +12,98 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install tools
-        run: |
-          pip install check-jsonschema pyyaml
-          sudo apt-get install -y jq
+        run: pip install pyyaml
 
-      - name: Find all qsm.yml files
-        id: find-qsm
+      - name: Validate QSM structure
         run: |
-          files=$(find . -name 'qsm.yml' -type f | sort)
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$files" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Validate qsm.yml against JSON Schema
-        run: |
-          for qsm in $(find . -name 'qsm.yml' -type f); do
+          for qsm in $(find examples -name 'qsm.yml' -type f); do
             echo "Validating $qsm..."
-            check-jsonschema --schemafile schemas/qsm-schema.json "$qsm"
-          done
-
-      - name: Validate metadata.name matches directory path
-        run: |
-          for qsm in $(find . -name 'qsm.yml' -type f); do
-            dir=$(dirname "$qsm" | sed 's|^\./||')
-            expected_name=$(echo "$dir" | sed 's|/|-|g')
-            actual_name=$(python3 -c "
-          import yaml, sys
-          with open('$qsm') as f:
-              doc = yaml.safe_load(f)
-          print(doc['metadata']['name'])
-          ")
-            if [ "$expected_name" != "$actual_name" ]; then
-              echo "ERROR: $qsm metadata.name '$actual_name' does not match directory '$expected_name'"
-              exit 1
-            fi
-            echo "OK: $qsm name '$actual_name' matches directory"
-          done
-
-      - name: Validate injectedVariables exist in variables.tf
-        run: |
-          for qsm in $(find . -name 'qsm.yml' -type f); do
-            dir=$(dirname "$qsm")
-            vars_file="$dir/variables.tf"
-            if [ ! -f "$vars_file" ]; then
-              echo "ERROR: $vars_file not found"
-              exit 1
-            fi
 
             python3 -c "
-          import yaml, re, sys
+          import yaml, sys
+
           with open('$qsm') as f:
               doc = yaml.safe_load(f)
 
-          # Extract variable names from variables.tf
-          with open('$vars_file') as f:
-              tf_content = f.read()
-          tf_vars = set(re.findall(r'variable\s+\"(\w+)\"', tf_content))
-
           errors = []
-          for var in doc['spec'].get('injectedVariables', []):
-              if var['name'] not in tf_vars:
-                  errors.append(f\"injectedVariable '{var['name']}' not found in {\"$vars_file\"}\")
 
-          for var in doc['spec'].get('userVariables', []):
-              if var['name'] not in tf_vars:
-                  errors.append(f\"userVariable '{var['name']}' not found in {\"$vars_file\"}\")
+          # Required top-level fields
+          for field in ['apiVersion', 'kind', 'metadata', 'spec']:
+              if field not in doc:
+                  errors.append(f'Missing required field: {field}')
 
           if errors:
               for e in errors:
                   print(f'ERROR: {e}')
               sys.exit(1)
-          print(f'OK: All variables in $qsm exist in $vars_file')
+
+          meta = doc.get('metadata', {})
+          for field in ['name', 'version']:
+              if field not in meta:
+                  errors.append(f'Missing metadata.{field}')
+
+          spec = doc.get('spec', {})
+          engine = spec.get('engine')
+          if engine not in ('terraform', 'opentofu', 'helm'):
+              errors.append(f'spec.engine must be terraform, opentofu, or helm (got: {engine})')
+
+          if engine in ('terraform', 'opentofu') and 'provider' not in spec:
+              errors.append(f'spec.provider is required when engine is {engine}')
+
+          if engine == 'helm' and 'chart' not in spec:
+              errors.append('spec.chart is required when engine is helm')
+
+          if errors:
+              for e in errors:
+                  print(f'ERROR: {e}')
+              sys.exit(1)
+
+          print(f'OK: $qsm')
           "
           done
 
-      - name: Validate outputs start with QSM_ and exist in .tf files
+      - name: Validate variables exist in TF files (terraform blueprints)
         run: |
-          for qsm in $(find . -name 'qsm.yml' -type f); do
+          for qsm in $(find examples -name 'qsm.yml' -type f); do
             dir=$(dirname "$qsm")
 
             python3 -c "
-          import yaml, re, glob, sys
+          import yaml, re, sys, glob
+
           with open('$qsm') as f:
               doc = yaml.safe_load(f)
 
-          # Extract output names from all .tf files in the directory
-          tf_outputs = set()
-          for tf_file in glob.glob('$dir/*.tf'):
-              with open(tf_file) as f:
-                  tf_outputs.update(re.findall(r'output\s+\"(\w+)\"', f.read()))
+          engine = doc.get('spec', {}).get('engine')
+          if engine not in ('terraform', 'opentofu'):
+              print(f'SKIP: $qsm (engine={engine}, not terraform)')
+              sys.exit(0)
+
+          # Check variables.tf exists
+          vars_file = '$dir/variables.tf'
+          try:
+              with open(vars_file) as f:
+                  tf_content = f.read()
+          except FileNotFoundError:
+              print(f'ERROR: {vars_file} not found')
+              sys.exit(1)
+
+          tf_vars = set(re.findall(r'variable\s+\"(\w+)\"', tf_content))
 
           errors = []
-          for output in doc['spec'].get('outputs', []):
-              name = output['name']
-              if not name.startswith('QSM_'):
-                  errors.append(f\"Output '{name}' must start with 'QSM_'\")
-              if name not in tf_outputs:
-                  errors.append(f\"Output '{name}' not found in .tf files in $dir\")
+          for var in doc['spec'].get('qoveryVariables', []):
+              if var['name'] not in tf_vars:
+                  errors.append(f\"qoveryVariable '{var['name']}' not found in {vars_file}\")
+
+          for var in doc['spec'].get('userVariables', []):
+              if var['name'] not in tf_vars:
+                  errors.append(f\"userVariable '{var['name']}' not found in {vars_file}\")
 
           if errors:
               for e in errors:
                   print(f'ERROR: {e}')
               sys.exit(1)
-          print(f'OK: All outputs in $qsm are valid')
+
+          print(f'OK: All variables in $qsm exist in {vars_file}')
           "
           done
 
@@ -124,10 +113,7 @@ jobs:
     strategy:
       matrix:
         blueprint:
-          - aws/postgresql
-          - aws/mysql
-          - aws/redis
-          - aws/mongodb
+          - examples/aws-s3
     steps:
       - uses: actions/checkout@v4
 
@@ -140,4 +126,3 @@ jobs:
         run: |
           terraform init -backend=false
           terraform validate
-

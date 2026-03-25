@@ -1,0 +1,16 @@
+architecture: replication
+
+auth:
+  enabled: true
+  password: "{{ password }}"
+
+master:
+  resources:
+    limits:
+      memory: "{{ memory_limit }}"
+
+replica:
+  replicaCount: {{ replica_count }}
+  resources:
+    limits:
+      memory: "{{ memory_limit }}"

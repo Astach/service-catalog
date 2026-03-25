@@ -11,7 +11,8 @@ metadata:
     - "s3"
 
 spec:
-  provider: "aws"
+  engine: terraform
+  provider: aws
 
   qoveryVariables:
     - name: "region"
